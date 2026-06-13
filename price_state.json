@@ -1,10 +1,14 @@
 {
-  "last_price": 65.0,
+  "last_price": 159.87,
   "lowest_price": 65.0,
   "history": [
     {
       "date": "2026-06-13T15:19:22",
       "price": 65.0
+    },
+    {
+      "date": "2026-06-13T16:01:06",
+      "price": 159.87
     }
   ]
 }
