@@ -3,7 +3,7 @@ name: AutoReisen price monitor
 on:
   schedule:
     # Todos los días a las 09:00 de Madrid en horario de verano equivale a 07:00 UTC.
-    - cron: "0 7 * * *"
+    - cron: "0 5 * * *"
   workflow_dispatch:
 
 permissions:
