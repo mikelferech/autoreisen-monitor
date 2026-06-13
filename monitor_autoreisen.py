@@ -105,21 +105,18 @@ def fill_search_form(driver) -> None:
     driver.get(URL)
     wait = WebDriverWait(driver, 30)
     wait.until(EC.presence_of_element_located((By.TAG_NAME, "select")))
-    selects = all_selects(driver)
-    if len(selects) < 8:
-        raise RuntimeError(f"La página tiene menos selects de los esperados: {len(selects)}")
 
-    # En la web aparecen, en orden aproximado: oficina recogida, oficina devolución, día recogida,
-    # mes recogida, hora recogida, día devolución, mes devolución, hora devolución.
-    select_by_visible_text_contains(selects[0], LOCATION_TEXT)
-    select_by_visible_text_contains(selects[1], "Misma Oficina")
-    select_by_visible_text_contains(selects[2], PICKUP_DAY)
-    select_by_visible_text_contains(selects[3], PICKUP_MONTH_YEAR)
-    select_by_visible_text_contains(selects[4], PICKUP_TIME)
-    select_by_visible_text_contains(selects[5], RETURN_DAY)
-    select_by_visible_text_contains(selects[6], RETURN_MONTH_YEAR)
-    select_by_visible_text_contains(selects[7], RETURN_TIME)
-    click_submit(driver)
+    selects = all_selects(driver)
+
+    print(f"Total selects encontrados: {len(selects)}")
+
+    for i, select_el in enumerate(selects):
+        print(f"--- SELECT {i} ---")
+        sel = Select(select_el)
+        for option in sel.options:
+            print("-", option.text)
+
+    raise RuntimeError("Debug de desplegables terminado")
 
 
 def extract_price_from_page(driver) -> float:
