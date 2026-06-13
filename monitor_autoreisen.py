@@ -207,7 +207,13 @@ def fill_search_form(driver) -> None:
 
 
 def extract_price_from_page(driver) -> float:
-    return 137.03
+    text = driver.find_element(By.TAG_NAME, "body").text
+
+    print("=== INICIO RESULTADOS ===")
+    print(text[:15000])
+    print("=== FIN RESULTADOS ===")
+
+    raise RuntimeError("DEBUG RESULTADOS")
 
 
 def get_current_price() -> float:
