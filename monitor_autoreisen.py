@@ -14,9 +14,9 @@ from selenium.webdriver.support.ui import Select, WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
 URL = "https://www.autoreisen.com/alquiler-coches/alquiler-de-coches.php"
+RESULTS_URL = "https://www.autoreisen.com/alquiler-coches/tarifas-flota.php"
 STATE_FILE = Path(os.getenv("STATE_FILE", "price_state.json"))
 
-# Datos de tu búsqueda
 LOCATION_TEXT = os.getenv("LOCATION_TEXT", "Gran Canaria - Aeropuerto")
 CAR_TEXT = os.getenv("CAR_TEXT", "Seat Arona")
 CAR_GROUP = os.getenv("CAR_GROUP", "E")
@@ -43,9 +43,14 @@ def send_telegram(text: str) -> None:
         print("Telegram no configurado. Mensaje:")
         print(text)
         return
+
     resp = requests.post(
         f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-        json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "disable_web_page_preview": True},
+        json={
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": text,
+            "disable_web_page_preview": True,
+        },
         timeout=30,
     )
     resp.raise_for_status()
@@ -54,11 +59,19 @@ def send_telegram(text: str) -> None:
 def load_state() -> dict:
     if STATE_FILE.exists():
         return json.loads(STATE_FILE.read_text(encoding="utf-8"))
-    return {"last_price": BASELINE_PRICE, "lowest_price": BASELINE_PRICE, "history": []}
+
+    return {
+        "last_price": BASELINE_PRICE,
+        "lowest_price": BASELINE_PRICE,
+        "history": [],
+    }
 
 
 def save_state(state: dict) -> None:
-    STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
+    STATE_FILE.write_text(
+        json.dumps(state, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
 
 def make_driver() -> webdriver.Chrome:
@@ -71,13 +84,34 @@ def make_driver() -> webdriver.Chrome:
     return webdriver.Chrome(options=options)
 
 
+def accept_cookies_if_present(driver) -> None:
+    time.sleep(2)
+
+    candidates = driver.find_elements(By.TAG_NAME, "button")
+    candidates += driver.find_elements(
+        By.CSS_SELECTOR,
+        "input[type='button'], input[type='submit'], a",
+    )
+
+    for el in candidates:
+        txt = ((el.text or "") + " " + (el.get_attribute("value") or "")).casefold()
+        if "permitir todas" in txt or "aceptar" in txt:
+            try:
+                driver.execute_script("arguments[0].click();", el)
+                time.sleep(1)
+                return
+            except Exception:
+                pass
+
+
 def select_by_visible_text_contains(select_el, wanted: str) -> None:
     sel = Select(select_el)
     wanted_norm = wanted.casefold().strip()
 
     for option in sel.options:
-        if wanted_norm in option.text.casefold():
-            sel.select_by_visible_text(option.text)
+        option_text = option.text.strip()
+        if wanted_norm in option_text.casefold():
+            sel.select_by_visible_text(option_text)
             return
 
     print("Opciones disponibles:")
@@ -92,40 +126,49 @@ def all_selects(driver):
 
 
 def click_submit(driver) -> None:
-    print("FORMULARIOS ENCONTRADOS:")
     forms = driver.find_elements(By.TAG_NAME, "form")
-    for i, form in enumerate(forms):
-        print(f"--- FORM {i} ---")
-        print("action:", form.get_attribute("action"))
-        print("method:", form.get_attribute("method"))
-        print("text:", form.text[:500])
 
-    print("BOTONES/INPUTS ENCONTRADOS:")
-    candidates = driver.find_elements(By.CSS_SELECTOR, "a, button, input")
-    for i, el in enumerate(candidates):
-        txt = ((el.get_attribute("value") or "") + " " + (el.text or "")).strip()
-        typ = el.get_attribute("type")
-        name = el.get_attribute("name")
-        href = el.get_attribute("href")
-        print(f"{i}: type={typ} name={name} text={txt} href={href}")
+    if len(forms) < 2:
+        raise RuntimeError(f"No encuentro el formulario correcto. Formularios: {len(forms)}")
 
-    raise RuntimeError("Debug botones/formularios terminado")
-    
-def accept_cookies_if_present(driver) -> None:
-    time.sleep(2)
-    buttons = driver.find_elements(By.TAG_NAME, "button") + driver.find_elements(By.CSS_SELECTOR, "input[type='button'], input[type='submit']")
-    for btn in buttons:
-        txt = ((btn.text or "") + " " + (btn.get_attribute("value") or "")).casefold()
-        if "permitir todas" in txt or "aceptar" in txt:
-            btn.click()
-            time.sleep(1)
+    form = forms[1]
+
+    print("Enviando formulario:")
+    print("action:", form.get_attribute("action"))
+    print("method:", form.get_attribute("method"))
+
+    driver.execute_script("arguments[0].submit();", form)
+    time.sleep(5)
+
+    for _ in range(8):
+        if "tarifas-flota.php" in driver.current_url:
+            break
+        time.sleep(1)
+
+    candidates = driver.find_elements(
+        By.CSS_SELECTOR,
+        "a, button, input[type='button'], input[type='submit']",
+    )
+
+    for el in candidates:
+        txt = ((el.text or "") + " " + (el.get_attribute("value") or "")).casefold()
+        href = el.get_attribute("href") or ""
+
+        if "continuar" in txt:
+            driver.execute_script("arguments[0].click();", el)
+            time.sleep(5)
             return
+
+        if "tarifas-flota.php" in href and "coche=" in href:
+            return
+
 
 def fill_search_form(driver) -> None:
     driver.get(URL)
     accept_cookies_if_present(driver)
 
     wait = WebDriverWait(driver, 30)
+
     try:
         wait.until(EC.presence_of_element_located((By.TAG_NAME, "select")))
     except Exception:
@@ -139,16 +182,26 @@ def fill_search_form(driver) -> None:
     if len(selects) < 9:
         raise RuntimeError(f"Solo encuentro {len(selects)} selects")
 
-    select_by_visible_text_contains(selects[1], "Gran Canaria - Aeropuerto")
+    select_by_visible_text_contains(selects[1], LOCATION_TEXT)
     select_by_visible_text_contains(selects[2], "Misma Oficina")
 
-    select_by_visible_text_contains(selects[3], "14")
-    select_by_visible_text_contains(selects[4], "Sep-2026")
-    select_by_visible_text_contains(selects[5], "09:00")
+    select_by_visible_text_contains(selects[3], PICKUP_DAY)
+    select_by_visible_text_contains(selects[4], PICKUP_MONTH_YEAR)
+    select_by_visible_text_contains(selects[5], PICKUP_TIME)
 
-    select_by_visible_text_contains(selects[6], "21")
-    select_by_visible_text_contains(selects[7], "Sep-2026")
-    select_by_visible_text_contains(selects[8], "15:00")
+    select_by_visible_text_contains(selects[6], RETURN_DAY)
+    select_by_visible_text_contains(selects[7], RETURN_MONTH_YEAR)
+    select_by_visible_text_contains(selects[8], RETURN_TIME)
+
+    print("Valores seleccionados:")
+    print("OFICINA:", Select(selects[1]).first_selected_option.text)
+    print("DEVOLUCION:", Select(selects[2]).first_selected_option.text)
+    print("RECOGIDA DIA:", Select(selects[3]).first_selected_option.text)
+    print("RECOGIDA MES:", Select(selects[4]).first_selected_option.text)
+    print("RECOGIDA HORA:", Select(selects[5]).first_selected_option.text)
+    print("DEV DIA:", Select(selects[6]).first_selected_option.text)
+    print("DEV MES:", Select(selects[7]).first_selected_option.text)
+    print("DEV HORA:", Select(selects[8]).first_selected_option.text)
 
     click_submit(driver)
 
@@ -159,14 +212,15 @@ def extract_price_from_page(driver) -> float:
     text = driver.find_element(By.TAG_NAME, "body").text
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
 
+    print("URL resultados:", driver.current_url)
     print("Texto visible de resultados:")
-    print("\n".join(lines[:80]))
+    print("\n".join(lines[:120]))
 
     for i, line in enumerate(lines):
         line_norm = line.casefold()
 
         if line_norm.startswith("e -") or "seat arona" in line_norm or "arona" in line_norm:
-            context = "\n".join(lines[i:i + 15])
+            context = "\n".join(lines[i:i + 20])
             print("Contexto Grupo E / Arona:")
             print(context)
 
@@ -185,6 +239,7 @@ def extract_price_from_page(driver) -> float:
 
 def get_current_price() -> float:
     driver = make_driver()
+
     try:
         fill_search_form(driver)
         return extract_price_from_page(driver)
@@ -194,19 +249,30 @@ def get_current_price() -> float:
 
 def main() -> int:
     state = load_state()
+
     previous_price = float(state.get("last_price", BASELINE_PRICE))
     lowest_price = float(state.get("lowest_price", BASELINE_PRICE))
 
     try:
         price = get_current_price()
     except Exception as exc:
-        send_telegram(f"⚠️ AutoReisen: no he podido consultar el precio hoy.\nError: {exc}")
+        send_telegram(
+            f"⚠️ AutoReisen: no he podido consultar el precio hoy.\n"
+            f"Error: {exc}"
+        )
         raise
 
     now = datetime.now().isoformat(timespec="seconds")
-    state.setdefault("history", []).append({"date": now, "price": price})
+
+    state.setdefault("history", []).append(
+        {
+            "date": now,
+            "price": price,
+        }
+    )
     state["last_price"] = price
     state["lowest_price"] = min(lowest_price, price)
+
     save_state(state)
 
     diff_baseline = price - BASELINE_PRICE
@@ -224,6 +290,7 @@ def main() -> int:
             f"Reserva/revisa aquí: {URL}"
         )
         send_telegram(msg)
+
     elif ALWAYS_NOTIFY:
         msg = (
             f"AutoReisen hoy: {euro(price)}\n"
@@ -232,6 +299,7 @@ def main() -> int:
             f"Gran Canaria Aeropuerto · Grupo {CAR_GROUP} {CAR_TEXT}"
         )
         send_telegram(msg)
+
     else:
         print(f"Precio actual: {price}; sin bajada")
 
