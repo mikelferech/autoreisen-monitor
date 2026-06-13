@@ -92,13 +92,25 @@ def all_selects(driver):
 
 
 def click_submit(driver) -> None:
-    candidates = driver.find_elements(By.CSS_SELECTOR, "input[type='submit'], button, input[type='button']")
+    candidates = driver.find_elements(By.CSS_SELECTOR, "input[type='submit'], button, input[type='button'], a")
     for el in candidates:
         txt = ((el.get_attribute("value") or "") + " " + (el.text or "")).casefold()
         if any(word in txt for word in ["presup", "buscar", "reserv", "continuar"]):
             el.click()
+            time.sleep(3)
+
+            # Si aparece una pantalla intermedia con "Continuar", pulsa de nuevo
+            candidates2 = driver.find_elements(By.CSS_SELECTOR, "input[type='submit'], button, input[type='button'], a")
+            for el2 in candidates2:
+                txt2 = ((el2.get_attribute("value") or "") + " " + (el2.text or "")).casefold()
+                if "continuar" in txt2:
+                    el2.click()
+                    time.sleep(5)
+                    return
+
             return
-    raise RuntimeError("No encuentro botón de búsqueda/presupuesto")
+
+    raise RuntimeError("No encuentro botón de búsqueda/presupuesto/continuar")
 
 def accept_cookies_if_present(driver) -> None:
     time.sleep(2)
