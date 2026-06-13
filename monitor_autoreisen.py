@@ -92,21 +92,25 @@ def all_selects(driver):
 
 
 def click_submit(driver) -> None:
+    print("FORMULARIOS ENCONTRADOS:")
     forms = driver.find_elements(By.TAG_NAME, "form")
-    if not forms:
-        raise RuntimeError("No encuentro ningún formulario")
+    for i, form in enumerate(forms):
+        print(f"--- FORM {i} ---")
+        print("action:", form.get_attribute("action"))
+        print("method:", form.get_attribute("method"))
+        print("text:", form.text[:500])
 
-    driver.execute_script("arguments[0].submit();", forms[0])
-    time.sleep(5)
+    print("BOTONES/INPUTS ENCONTRADOS:")
+    candidates = driver.find_elements(By.CSS_SELECTOR, "a, button, input")
+    for i, el in enumerate(candidates):
+        txt = ((el.get_attribute("value") or "") + " " + (el.text or "")).strip()
+        typ = el.get_attribute("type")
+        name = el.get_attribute("name")
+        href = el.get_attribute("href")
+        print(f"{i}: type={typ} name={name} text={txt} href={href}")
 
-    # Pantalla intermedia con botón/enlace Continuar
-    candidates = driver.find_elements(By.CSS_SELECTOR, "a, button, input[type='button'], input[type='submit']")
-    for el in candidates:
-        txt = ((el.get_attribute("value") or "") + " " + (el.text or "")).casefold()
-        if "continuar" in txt:
-            driver.execute_script("arguments[0].click();", el)
-            time.sleep(5)
-            return
+    raise RuntimeError("Debug botones/formularios terminado")
+    
 def accept_cookies_if_present(driver) -> None:
     time.sleep(2)
     buttons = driver.find_elements(By.TAG_NAME, "button") + driver.find_elements(By.CSS_SELECTOR, "input[type='button'], input[type='submit']")
