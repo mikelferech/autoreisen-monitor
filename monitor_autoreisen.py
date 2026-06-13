@@ -182,17 +182,20 @@ def fill_search_form(driver) -> None:
     if len(selects) < 9:
         raise RuntimeError(f"Solo encuentro {len(selects)} selects")
 
-    select_by_visible_text_contains(selects[1], LOCATION_TEXT)
-    select_by_visible_text_contains(selects[2], "Misma Oficina")
-
     select_by_visible_text_contains(selects[3], PICKUP_DAY)
     select_by_visible_text_contains(selects[4], PICKUP_MONTH_YEAR)
+    time.sleep(1)
+
+    selects = all_selects(driver)
     select_by_visible_text_contains(selects[5], PICKUP_TIME)
 
     select_by_visible_text_contains(selects[6], RETURN_DAY)
     select_by_visible_text_contains(selects[7], RETURN_MONTH_YEAR)
-    select_by_visible_text_contains(selects[8], RETURN_TIME)
+    time.sleep(1)
 
+    selects = all_selects(driver)
+    select_by_visible_text_contains(selects[8], RETURN_TIME)
+    
     print("Valores seleccionados:")
     print("OFICINA:", Select(selects[1]).first_selected_option.text)
     print("DEVOLUCION:", Select(selects[2]).first_selected_option.text)
