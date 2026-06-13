@@ -127,7 +127,7 @@ def fill_search_form(driver) -> None:
 
     wait = WebDriverWait(driver, 30)
     try:
-    wait.until(EC.presence_of_element_located((By.TAG_NAME, "select")))
+        wait.until(EC.presence_of_element_located((By.TAG_NAME, "select")))
 except Exception:
     print("URL actual:", driver.current_url)
     print("Texto visible de la página:")
