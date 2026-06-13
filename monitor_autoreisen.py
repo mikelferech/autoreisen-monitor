@@ -125,28 +125,33 @@ def fill_search_form(driver) -> None:
 
 
 def extract_price_from_page(driver) -> float:
-    # Espera a que la página de resultados cargue algo que parezca precio/modelo.
-    WebDriverWait(driver, 30).until(lambda d: "€" in d.page_source or "Seat" in d.page_source or "Arona" in d.page_source)
+    WebDriverWait(driver, 30).until(
+        lambda d: "Seat Arona" in d.page_source or "Arona" in d.page_source
+    )
+
     text = driver.find_element(By.TAG_NAME, "body").text
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
 
-    # Busca líneas/cajas cerca del modelo Seat Arona o grupo E.
-    candidates = []
     for i, line in enumerate(lines):
-        context = "\n".join(lines[max(0, i-4): min(len(lines), i+8)])
-        if CAR_TEXT.casefold() in context.casefold() or re.search(rf"\bgrupo\s*{re.escape(CAR_GROUP)}\b", context, re.I):
+        line_norm = line.casefold()
+
+        if "seat arona" in line_norm or ("grupo e" in line_norm and "arona" in line_norm):
+            context = "\n".join(lines[i:i + 12])
+            print("Contexto encontrado para Seat Arona:")
+            print(context)
+
+            prices = []
             for m in re.finditer(r"(\d{1,4}(?:[\.,]\d{2})?)\s*€", context):
-                candidates.append(float(m.group(1).replace(".", "").replace(",", ".")))
+                price = float(m.group(1).replace(".", "").replace(",", "."))
+                prices.append(price)
 
-    if not candidates:
-        # Fallback: cualquier precio de la página, útil para depurar.
-        for m in re.finditer(r"(\d{1,4}(?:[\.,]\d{2})?)\s*€", text):
-            candidates.append(float(m.group(1).replace(".", "").replace(",", ".")))
+            # Filtramos precios absurdos como €/día o importes sueltos.
+            valid_prices = [p for p in prices if p >= 100]
 
-    if not candidates:
-        raise RuntimeError("No he podido encontrar ningún precio en la página de resultados")
+            if valid_prices:
+                return min(valid_prices)
 
-    return min(candidates)
+    raise RuntimeError("No he podido encontrar el precio del Seat Arona / Grupo E")
 
 
 def get_current_price() -> float:
