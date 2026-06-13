@@ -92,23 +92,38 @@ def all_selects(driver):
 
 
 def click_submit(driver) -> None:
-    candidates = driver.find_elements(By.CSS_SELECTOR, "input[type='submit'], button, input[type='button'], a")
-    for el in candidates:
+    # Botón real del formulario
+    buttons = driver.find_elements(By.CSS_SELECTOR, "input[type='submit'], button")
+
+    for el in buttons:
         txt = ((el.get_attribute("value") or "") + " " + (el.text or "")).casefold()
-        if any(word in txt for word in ["presup", "buscar", "reserv", "continuar"]):
-            el.click()
-            time.sleep(3)
+        if "presupuesto" in txt or "presupuest" in txt or "buscar" in txt:
+            driver.execute_script("arguments[0].scrollIntoView(true);", el)
+            time.sleep(1)
+            driver.execute_script("arguments[0].click();", el)
+            time.sleep(4)
+            break
+    else:
+        # Si no encuentra botón, intenta enviar el primer formulario
+        forms = driver.find_elements(By.TAG_NAME, "form")
+        if forms:
+            driver.execute_script("arguments[0].submit();", forms[0])
+            time.sleep(4)
+        else:
+            raise RuntimeError("No encuentro formulario ni botón de búsqueda")
 
-            # Si aparece una pantalla intermedia con "Continuar", pulsa de nuevo
-            candidates2 = driver.find_elements(By.CSS_SELECTOR, "input[type='submit'], button, input[type='button'], a")
-            for el2 in candidates2:
-                txt2 = ((el2.get_attribute("value") or "") + " " + (el2.text or "")).casefold()
-                if "continuar" in txt2:
-                    el2.click()
-                    time.sleep(5)
-                    return
-
-            return
+    # Pantalla intermedia: botón/enlace Continuar
+    for _ in range(5):
+        candidates = driver.find_elements(By.CSS_SELECTOR, "a, button, input[type='button'], input[type='submit']")
+        for el in candidates:
+            txt = ((el.get_attribute("value") or "") + " " + (el.text or "")).casefold()
+            if "continuar" in txt:
+                driver.execute_script("arguments[0].scrollIntoView(true);", el)
+                time.sleep(1)
+                driver.execute_script("arguments[0].click();", el)
+                time.sleep(5)
+                return
+        time.sleep(1)
 
     raise RuntimeError("No encuentro botón de búsqueda/presupuesto/continuar")
 
