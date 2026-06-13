@@ -33,6 +33,12 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           BASELINE_PRICE: "137.03"
           ALWAYS_NOTIFY: "true"
+          PICKUP_DAY: "14"
+          PICKUP_MONTH_YEAR: "Sep-2026"
+          PICKUP_TIME: "09:00"
+          RETURN_DAY: "21"
+          RETURN_MONTH_YEAR: "Sep-2026"
+          RETURN_TIME: "15:00"
         run: python monitor_autoreisen.py
 
       - name: Save price history
