@@ -100,10 +100,19 @@ def click_submit(driver) -> None:
             return
     raise RuntimeError("No encuentro botón de búsqueda/presupuesto")
 
+def accept_cookies_if_present(driver) -> None:
+    time.sleep(2)
+    buttons = driver.find_elements(By.TAG_NAME, "button") + driver.find_elements(By.CSS_SELECTOR, "input[type='button'], input[type='submit']")
+    for btn in buttons:
+        txt = ((btn.text or "") + " " + (btn.get_attribute("value") or "")).casefold()
+        if "permitir todas" in txt or "aceptar" in txt:
+            btn.click()
+            time.sleep(1)
+            return
 
 def fill_search_form(driver) -> None:
     driver.get(URL)
-
+accept_cookies_if_present(driver)
     wait = WebDriverWait(driver, 30)
     wait.until(EC.presence_of_element_located((By.TAG_NAME, "select")))
 
