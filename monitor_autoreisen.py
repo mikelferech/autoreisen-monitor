@@ -14,7 +14,6 @@ from selenium.webdriver.support.ui import Select, WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
 URL = "https://www.autoreisen.com/alquiler-coches/alquiler-de-coches.php"
-RESULTS_URL = "https://www.autoreisen.com/alquiler-coches/tarifas-flota.php"
 STATE_FILE = Path(os.getenv("STATE_FILE", "price_state.json"))
 
 LOCATION_TEXT = os.getenv("LOCATION_TEXT", "Gran Canaria - Aeropuerto")
@@ -104,6 +103,10 @@ def accept_cookies_if_present(driver) -> None:
                 pass
 
 
+def all_selects(driver):
+    return driver.find_elements(By.TAG_NAME, "select")
+
+
 def select_by_visible_text_contains(select_el, wanted: str) -> None:
     sel = Select(select_el)
     wanted_norm = wanted.casefold().strip()
@@ -121,46 +124,107 @@ def select_by_visible_text_contains(select_el, wanted: str) -> None:
     raise RuntimeError(f"No encuentro opción que contenga: {wanted}")
 
 
-def all_selects(driver):
-    return driver.find_elements(By.TAG_NAME, "select")
+def select_has_option(select_el, wanted: str) -> bool:
+    wanted_norm = wanted.casefold().strip()
+    return any(wanted_norm in o.text.casefold().strip() for o in Select(select_el).options)
+
+
+def select_has_exact_option(select_el, wanted: str) -> bool:
+    wanted_norm = wanted.casefold().strip()
+    return any(wanted_norm == o.text.casefold().strip() for o in Select(select_el).options)
+
+
+def find_location_select(driver):
+    matches = [s for s in all_selects(driver) if select_has_option(s, LOCATION_TEXT)]
+    if not matches:
+        raise RuntimeError("No encuentro desplegable de oficina de recogida")
+    return matches[0]
+
+
+def find_return_location_select(driver, pickup_select):
+    matches = [s for s in all_selects(driver) if select_has_option(s, "Misma Oficina")]
+    matches = [s for s in matches if s.id != pickup_select.id]
+
+    if not matches:
+        raise RuntimeError("No encuentro desplegable de oficina de devolución")
+
+    return matches[0]
+
+
+def find_date_time_selects(driver):
+    selects = all_selects(driver)
+
+    location_selects = [
+        s for s in selects
+        if select_has_option(s, "Gran Canaria - Aeropuerto") or select_has_option(s, "Misma Oficina")
+    ]
+
+    usable = [s for s in selects if all(s.id != loc.id for loc in location_selects)]
+
+    day_selects = [
+        s for s in usable
+        if select_has_exact_option(s, "14") and select_has_exact_option(s, "21") and select_has_exact_option(s, "31")
+    ]
+
+    month_selects = [
+        s for s in usable
+        if select_has_exact_option(s, PICKUP_MONTH_YEAR)
+    ]
+
+    time_selects = [
+        s for s in usable
+        if select_has_exact_option(s, "09:00") and select_has_exact_option(s, "15:00") and select_has_exact_option(s, "23:59")
+    ]
+
+    if len(day_selects) < 2 or len(month_selects) < 2 or len(time_selects) < 2:
+        raise RuntimeError(
+            f"No encuentro selects suficientes. "
+            f"días={len(day_selects)}, meses={len(month_selects)}, horas={len(time_selects)}"
+        )
+
+    return day_selects, month_selects, time_selects
 
 
 def click_submit(driver) -> None:
     forms = driver.find_elements(By.TAG_NAME, "form")
 
-    if len(forms) < 2:
-        raise RuntimeError(f"No encuentro el formulario correcto. Formularios: {len(forms)}")
+    target_form = None
+    for form in forms:
+        action = form.get_attribute("action") or ""
+        if "tarifas-flota.php" in action:
+            target_form = form
+            break
 
-    form = forms[1]
+    if target_form is None:
+        raise RuntimeError(f"No encuentro el formulario de tarifas. Formularios: {len(forms)}")
 
     print("Enviando formulario:")
-    print("action:", form.get_attribute("action"))
-    print("method:", form.get_attribute("method"))
+    print("action:", target_form.get_attribute("action"))
+    print("method:", target_form.get_attribute("method"))
 
-    driver.execute_script("arguments[0].submit();", form)
+    driver.execute_script("arguments[0].submit();", target_form)
     time.sleep(5)
 
-    for _ in range(8):
-        if "tarifas-flota.php" in driver.current_url:
-            break
+    # Pantalla intermedia de Gran Canaria con botón Continuar
+    for _ in range(10):
+        body = driver.find_element(By.TAG_NAME, "body").text.casefold()
+
+        if "e - seat arona" in body or "seat arona" in body:
+            return
+
+        candidates = driver.find_elements(
+            By.CSS_SELECTOR,
+            "a, button, input[type='button'], input[type='submit']",
+        )
+
+        for el in candidates:
+            txt = ((el.text or "") + " " + (el.get_attribute("value") or "")).casefold()
+            if "continuar" in txt:
+                driver.execute_script("arguments[0].click();", el)
+                time.sleep(5)
+                return
+
         time.sleep(1)
-
-    candidates = driver.find_elements(
-        By.CSS_SELECTOR,
-        "a, button, input[type='button'], input[type='submit']",
-    )
-
-    for el in candidates:
-        txt = ((el.text or "") + " " + (el.get_attribute("value") or "")).casefold()
-        href = el.get_attribute("href") or ""
-
-        if "continuar" in txt:
-            driver.execute_script("arguments[0].click();", el)
-            time.sleep(5)
-            return
-
-        if "tarifas-flota.php" in href and "coche=" in href:
-            return
 
 
 def fill_search_form(driver) -> None:
@@ -168,43 +232,35 @@ def fill_search_form(driver) -> None:
     accept_cookies_if_present(driver)
 
     wait = WebDriverWait(driver, 30)
+    wait.until(EC.presence_of_element_located((By.TAG_NAME, "select")))
 
-    try:
-        wait.until(EC.presence_of_element_located((By.TAG_NAME, "select")))
-    except Exception:
-        print("URL actual:", driver.current_url)
-        print("Texto visible de la página:")
-        print(driver.find_element(By.TAG_NAME, "body").text[:3000])
-        raise
-
-    selects = all_selects(driver)
-
-    if len(selects) < 9:
-        raise RuntimeError(f"Solo encuentro {len(selects)} selects")
-
-    select_by_visible_text_contains(selects[3], PICKUP_DAY)
-    select_by_visible_text_contains(selects[4], PICKUP_MONTH_YEAR)
+    pickup_location = find_location_select(driver)
+    select_by_visible_text_contains(pickup_location, LOCATION_TEXT)
     time.sleep(1)
 
-    selects = all_selects(driver)
-    select_by_visible_text_contains(selects[5], PICKUP_TIME)
-
-    select_by_visible_text_contains(selects[6], RETURN_DAY)
-    select_by_visible_text_contains(selects[7], RETURN_MONTH_YEAR)
+    return_location = find_return_location_select(driver, pickup_location)
+    select_by_visible_text_contains(return_location, "Misma Oficina")
     time.sleep(1)
 
-    selects = all_selects(driver)
-    select_by_visible_text_contains(selects[8], RETURN_TIME)
-    
+    day_selects, month_selects, time_selects = find_date_time_selects(driver)
+
+    select_by_visible_text_contains(day_selects[0], PICKUP_DAY)
+    select_by_visible_text_contains(month_selects[0], PICKUP_MONTH_YEAR)
+    select_by_visible_text_contains(time_selects[0], PICKUP_TIME)
+
+    select_by_visible_text_contains(day_selects[1], RETURN_DAY)
+    select_by_visible_text_contains(month_selects[1], RETURN_MONTH_YEAR)
+    select_by_visible_text_contains(time_selects[1], RETURN_TIME)
+
     print("Valores seleccionados:")
-    print("OFICINA:", Select(selects[1]).first_selected_option.text)
-    print("DEVOLUCION:", Select(selects[2]).first_selected_option.text)
-    print("RECOGIDA DIA:", Select(selects[3]).first_selected_option.text)
-    print("RECOGIDA MES:", Select(selects[4]).first_selected_option.text)
-    print("RECOGIDA HORA:", Select(selects[5]).first_selected_option.text)
-    print("DEV DIA:", Select(selects[6]).first_selected_option.text)
-    print("DEV MES:", Select(selects[7]).first_selected_option.text)
-    print("DEV HORA:", Select(selects[8]).first_selected_option.text)
+    print("OFICINA:", Select(pickup_location).first_selected_option.text)
+    print("DEVOLUCION:", Select(return_location).first_selected_option.text)
+    print("RECOGIDA DIA:", Select(day_selects[0]).first_selected_option.text)
+    print("RECOGIDA MES:", Select(month_selects[0]).first_selected_option.text)
+    print("RECOGIDA HORA:", Select(time_selects[0]).first_selected_option.text)
+    print("DEV DIA:", Select(day_selects[1]).first_selected_option.text)
+    print("DEV MES:", Select(month_selects[1]).first_selected_option.text)
+    print("DEV HORA:", Select(time_selects[1]).first_selected_option.text)
 
     click_submit(driver)
 
@@ -215,11 +271,15 @@ def extract_price_from_page(driver) -> float:
     text = driver.find_element(By.TAG_NAME, "body").text
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
 
+    print("URL resultados:", driver.current_url)
+
     for i, line in enumerate(lines):
         if "e - seat arona" in line.casefold():
-            context = "\n".join(lines[i:i + 8])
-            prices = []
+            context = "\n".join(lines[i:i + 10])
+            print("Contexto Grupo E / Arona:")
+            print(context)
 
+            prices = []
             for m in re.finditer(r"(\d{1,4}(?:[\.,]\d{2})?)\s*€", context):
                 price = float(m.group(1).replace(".", "").replace(",", "."))
                 prices.append(price)
@@ -229,6 +289,8 @@ def extract_price_from_page(driver) -> float:
             if valid_prices:
                 return min(valid_prices)
 
+    print("Texto resultados:")
+    print(text[:5000])
     raise RuntimeError("No he podido encontrar el precio del Grupo E / Seat Arona")
 
 
@@ -265,6 +327,7 @@ def main() -> int:
             "price": price,
         }
     )
+
     state["last_price"] = price
     state["lowest_price"] = min(lowest_price, price)
 
