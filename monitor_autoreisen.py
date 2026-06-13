@@ -17,7 +17,7 @@ URL = "https://www.autoreisen.com/alquiler-coches/alquiler-de-coches.php"
 STATE_FILE = Path(os.getenv("STATE_FILE", "price_state.json"))
 
 # Datos de tu búsqueda
-LOCATION_TEXT = os.getenv("LOCATION_TEXT", "Gran Canaria")
+LOCATION_TEXT = os.getenv("LOCATION_TEXT", "Gran Canaria - Aeropuerto")
 CAR_TEXT = os.getenv("CAR_TEXT", "Seat Arona")
 CAR_GROUP = os.getenv("CAR_GROUP", "E")
 BASELINE_PRICE = float(os.getenv("BASELINE_PRICE", "137.03"))
