@@ -125,19 +125,20 @@ def fill_search_form(driver) -> None:
 
 
 def extract_price_from_page(driver) -> float:
-    WebDriverWait(driver, 30).until(
-        lambda d: "Seat Arona" in d.page_source or "Arona" in d.page_source
-    )
+    WebDriverWait(driver, 30).until(lambda d: "€" in d.page_source)
 
     text = driver.find_element(By.TAG_NAME, "body").text
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
 
+    print("Texto visible de resultados:")
+    print("\n".join(lines[:80]))
+
     for i, line in enumerate(lines):
         line_norm = line.casefold()
 
-        if "seat arona" in line_norm or ("grupo e" in line_norm and "arona" in line_norm):
-            context = "\n".join(lines[i:i + 12])
-            print("Contexto encontrado para Seat Arona:")
+        if line_norm.startswith("e -") or "seat arona" in line_norm or "arona" in line_norm:
+            context = "\n".join(lines[i:i + 15])
+            print("Contexto Grupo E / Arona:")
             print(context)
 
             prices = []
@@ -145,13 +146,12 @@ def extract_price_from_page(driver) -> float:
                 price = float(m.group(1).replace(".", "").replace(",", "."))
                 prices.append(price)
 
-            # Filtramos precios absurdos como €/día o importes sueltos.
             valid_prices = [p for p in prices if p >= 100]
 
             if valid_prices:
                 return min(valid_prices)
 
-    raise RuntimeError("No he podido encontrar el precio del Seat Arona / Grupo E")
+    raise RuntimeError("No he podido encontrar el precio del Grupo E / Seat Arona")
 
 
 def get_current_price() -> float:
