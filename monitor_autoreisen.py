@@ -126,7 +126,13 @@ def fill_search_form(driver) -> None:
     accept_cookies_if_present(driver)
 
     wait = WebDriverWait(driver, 30)
+    try:
     wait.until(EC.presence_of_element_located((By.TAG_NAME, "select")))
+except Exception:
+    print("URL actual:", driver.current_url)
+    print("Texto visible de la página:")
+    print(driver.find_element(By.TAG_NAME, "body").text[:3000])
+    raise
 
     selects = all_selects(driver)
 
