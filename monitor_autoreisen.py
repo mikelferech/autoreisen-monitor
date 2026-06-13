@@ -92,41 +92,21 @@ def all_selects(driver):
 
 
 def click_submit(driver) -> None:
-    # Botón real del formulario
-    buttons = driver.find_elements(By.CSS_SELECTOR, "input[type='submit'], button")
+    forms = driver.find_elements(By.TAG_NAME, "form")
+    if not forms:
+        raise RuntimeError("No encuentro ningún formulario")
 
-    for el in buttons:
+    driver.execute_script("arguments[0].submit();", forms[0])
+    time.sleep(5)
+
+    # Pantalla intermedia con botón/enlace Continuar
+    candidates = driver.find_elements(By.CSS_SELECTOR, "a, button, input[type='button'], input[type='submit']")
+    for el in candidates:
         txt = ((el.get_attribute("value") or "") + " " + (el.text or "")).casefold()
-        if "presupuesto" in txt or "presupuest" in txt or "buscar" in txt:
-            driver.execute_script("arguments[0].scrollIntoView(true);", el)
-            time.sleep(1)
+        if "continuar" in txt:
             driver.execute_script("arguments[0].click();", el)
-            time.sleep(4)
-            break
-    else:
-        # Si no encuentra botón, intenta enviar el primer formulario
-        forms = driver.find_elements(By.TAG_NAME, "form")
-        if forms:
-            driver.execute_script("arguments[0].submit();", forms[0])
-            time.sleep(4)
-        else:
-            raise RuntimeError("No encuentro formulario ni botón de búsqueda")
-
-    # Pantalla intermedia: botón/enlace Continuar
-    for _ in range(5):
-        candidates = driver.find_elements(By.CSS_SELECTOR, "a, button, input[type='button'], input[type='submit']")
-        for el in candidates:
-            txt = ((el.get_attribute("value") or "") + " " + (el.text or "")).casefold()
-            if "continuar" in txt:
-                driver.execute_script("arguments[0].scrollIntoView(true);", el)
-                time.sleep(1)
-                driver.execute_script("arguments[0].click();", el)
-                time.sleep(5)
-                return
-        time.sleep(1)
-
-    raise RuntimeError("No encuentro botón de búsqueda/presupuesto/continuar")
-
+            time.sleep(5)
+            return
 def accept_cookies_if_present(driver) -> None:
     time.sleep(2)
     buttons = driver.find_elements(By.TAG_NAME, "button") + driver.find_elements(By.CSS_SELECTOR, "input[type='button'], input[type='submit']")
