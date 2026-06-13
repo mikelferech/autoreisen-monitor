@@ -229,10 +229,12 @@ def extract_price_from_page(driver) -> float:
                 price = float(m.group(1).replace(".", "").replace(",", "."))
                 prices.append(price)
 
-            valid_prices = [p for p in prices if p >= 100]
+            valid_prices = [p for p in prices if 100 <= p <= 200]
 
             if valid_prices:
-                return min(valid_prices)
+                # El precio total del Seat Arona debería estar cerca de la referencia inicial
+                closest = min(valid_prices, key=lambda p: abs(p - BASELINE_PRICE))
+                return closest
 
     raise RuntimeError("No he podido encontrar el precio del Grupo E / Seat Arona")
 
