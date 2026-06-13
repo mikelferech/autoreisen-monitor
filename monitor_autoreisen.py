@@ -115,6 +115,18 @@ def select_by_visible_text_contains(select_el, wanted: str) -> None:
         option_text = option.text.strip()
         if wanted_norm in option_text.casefold():
             sel.select_by_visible_text(option_text)
+
+            # Fuerza a la web a detectar el cambio
+            driver = select_el.parent
+            driver.execute_script(
+                """
+                arguments[0].dispatchEvent(new Event('input', { bubbles: true }));
+                arguments[0].dispatchEvent(new Event('change', { bubbles: true }));
+                """,
+                select_el,
+            )
+
+            time.sleep(0.5)
             return
 
     print("Opciones disponibles:")
@@ -122,7 +134,6 @@ def select_by_visible_text_contains(select_el, wanted: str) -> None:
         print("-", option.text)
 
     raise RuntimeError(f"No encuentro opción que contenga: {wanted}")
-
 
 def select_has_option(select_el, wanted: str) -> bool:
     wanted_norm = wanted.casefold().strip()
