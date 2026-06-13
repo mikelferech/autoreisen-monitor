@@ -108,32 +108,35 @@ def all_selects(driver):
 
 
 def select_by_visible_text_contains(select_el, wanted: str) -> None:
-    sel = Select(select_el)
     wanted_norm = wanted.casefold().strip()
+    driver = select_el.parent
 
-    for option in sel.options:
-        option_text = option.text.strip()
-        if wanted_norm in option_text.casefold():
-            sel.select_by_visible_text(option_text)
+    script = """
+    const select = arguments[0];
+    const wanted = arguments[1].toLowerCase().trim();
 
-            # Fuerza a la web a detectar el cambio
-            driver = select_el.parent
-            driver.execute_script(
-                """
-                arguments[0].dispatchEvent(new Event('input', { bubbles: true }));
-                arguments[0].dispatchEvent(new Event('change', { bubbles: true }));
-                """,
-                select_el,
-            )
+    for (let i = 0; i < select.options.length; i++) {
+        const txt = select.options[i].text.toLowerCase().trim();
+        if (txt.includes(wanted)) {
+            select.selectedIndex = i;
+            select.options[i].selected = true;
+            select.dispatchEvent(new Event('input', { bubbles: true }));
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+            return select.options[i].text;
+        }
+    }
+    return null;
+    """
 
-            time.sleep(0.5)
-            return
+    selected = driver.execute_script(script, select_el, wanted_norm)
 
-    print("Opciones disponibles:")
-    for option in sel.options:
-        print("-", option.text)
+    if selected is None:
+        print("Opciones disponibles:")
+        for option in Select(select_el).options:
+            print("-", option.text)
+        raise RuntimeError(f"No encuentro opción que contenga: {wanted}")
 
-    raise RuntimeError(f"No encuentro opción que contenga: {wanted}")
+    time.sleep(1)
 
 def select_has_option(select_el, wanted: str) -> bool:
     wanted_norm = wanted.casefold().strip()
@@ -246,14 +249,17 @@ def fill_search_form(driver) -> None:
     form = get_tarifas_form(driver)
     selects = form.find_elements(By.TAG_NAME, "select")
 
-    if len(selects) < 8:
-        raise RuntimeError(f"El formulario tiene menos selects de los esperados: {len(selects)}")
-
     select_by_visible_text_contains(selects[0], LOCATION_TEXT)
-    time.sleep(1)
+    time.sleep(2)
+
+    form = get_tarifas_form(driver)
+    selects = form.find_elements(By.TAG_NAME, "select")
 
     select_by_visible_text_contains(selects[1], "Misma Oficina")
-    time.sleep(1)
+    time.sleep(2)
+
+    form = get_tarifas_form(driver)
+    selects = form.find_elements(By.TAG_NAME, "select")
 
     select_by_visible_text_contains(selects[2], PICKUP_DAY)
     select_by_visible_text_contains(selects[3], PICKUP_MONTH_YEAR)
