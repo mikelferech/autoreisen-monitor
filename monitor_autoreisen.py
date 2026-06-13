@@ -160,6 +160,8 @@ def fill_search_form(driver) -> None:
     select_by_visible_text_contains(selects[7], "Sep-2026")
     select_by_visible_text_contains(selects[8], "15:00")
 
+    click_submit(driver)
+
 
 def extract_price_from_page(driver) -> float:
     WebDriverWait(driver, 30).until(lambda d: "€" in d.page_source)
