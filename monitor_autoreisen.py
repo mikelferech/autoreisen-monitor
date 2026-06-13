@@ -210,13 +210,26 @@ def fill_search_form(driver) -> None:
 
 
 def extract_price_from_page(driver) -> float:
+    WebDriverWait(driver, 30).until(lambda d: "€" in d.page_source)
+
     text = driver.find_element(By.TAG_NAME, "body").text
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
 
-    print("=== INICIO RESULTADOS ===")
-    print(text[:15000])
-    print("=== FIN RESULTADOS ===")
+    for i, line in enumerate(lines):
+        if "e - seat arona" in line.casefold():
+            context = "\n".join(lines[i:i + 8])
+            prices = []
 
-    raise RuntimeError("DEBUG RESULTADOS")
+            for m in re.finditer(r"(\d{1,4}(?:[\.,]\d{2})?)\s*€", context):
+                price = float(m.group(1).replace(".", "").replace(",", "."))
+                prices.append(price)
+
+            valid_prices = [p for p in prices if 100 <= p <= 250]
+
+            if valid_prices:
+                return min(valid_prices)
+
+    raise RuntimeError("No he podido encontrar el precio del Grupo E / Seat Arona")
 
 
 def get_current_price() -> float:
