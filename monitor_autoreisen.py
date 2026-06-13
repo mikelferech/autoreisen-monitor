@@ -78,6 +78,10 @@ def select_by_visible_text_contains(select_el, wanted: str) -> None:
         if wanted_norm in option.text.casefold():
             sel.select_by_visible_text(option.text)
             return
+            print("Opciones disponibles:")
+for option in Select(select_element).options:
+    print("-", option.text)
+    
     raise RuntimeError(f"No encuentro opción que contenga: {wanted}")
 
 
