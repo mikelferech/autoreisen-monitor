@@ -195,28 +195,26 @@ def find_date_time_selects(driver):
 
     return day_selects, month_selects, time_selects
 
-
-def click_submit(driver) -> None:
+def get_tarifas_form(driver):
     forms = driver.find_elements(By.TAG_NAME, "form")
 
-    target_form = None
     for form in forms:
         action = form.get_attribute("action") or ""
         if "tarifas-flota.php" in action:
-            target_form = form
-            break
+            return form
 
-    if target_form is None:
-        raise RuntimeError(f"No encuentro el formulario de tarifas. Formularios: {len(forms)}")
+    raise RuntimeError(f"No encuentro el formulario de tarifas. Formularios: {len(forms)}")
+
+def click_submit(driver) -> None:
+    form = get_tarifas_form(driver)
 
     print("Enviando formulario:")
-    print("action:", target_form.get_attribute("action"))
-    print("method:", target_form.get_attribute("method"))
+    print("action:", form.get_attribute("action"))
+    print("method:", form.get_attribute("method"))
 
-    driver.execute_script("arguments[0].submit();", target_form)
+    driver.execute_script("arguments[0].submit();", form)
     time.sleep(5)
 
-    # Pantalla intermedia de Gran Canaria con botón Continuar
     for _ in range(10):
         body = driver.find_element(By.TAG_NAME, "body").text.casefold()
 
@@ -242,39 +240,40 @@ def fill_search_form(driver) -> None:
     driver.get(URL)
     accept_cookies_if_present(driver)
 
-    wait = WebDriverWait(driver, 30)
+    wait = WebDriverWait(driver, 10)
     wait.until(EC.presence_of_element_located((By.TAG_NAME, "select")))
 
-    pickup_location = find_location_select(driver)
-    select_by_visible_text_contains(pickup_location, LOCATION_TEXT)
+    form = get_tarifas_form(driver)
+    selects = form.find_elements(By.TAG_NAME, "select")
+
+    if len(selects) < 8:
+        raise RuntimeError(f"El formulario tiene menos selects de los esperados: {len(selects)}")
+
+    select_by_visible_text_contains(selects[0], LOCATION_TEXT)
     time.sleep(1)
 
-    return_location = find_return_location_select(driver, pickup_location)
-    select_by_visible_text_contains(return_location, "Misma Oficina")
+    select_by_visible_text_contains(selects[1], "Misma Oficina")
     time.sleep(1)
 
-    day_selects, month_selects, time_selects = find_date_time_selects(driver)
+    select_by_visible_text_contains(selects[2], PICKUP_DAY)
+    select_by_visible_text_contains(selects[3], PICKUP_MONTH_YEAR)
+    select_by_visible_text_contains(selects[4], PICKUP_TIME)
 
-    select_by_visible_text_contains(day_selects[0], PICKUP_DAY)
-    select_by_visible_text_contains(month_selects[0], PICKUP_MONTH_YEAR)
-    select_by_visible_text_contains(time_selects[0], PICKUP_TIME)
-
-    select_by_visible_text_contains(day_selects[1], RETURN_DAY)
-    select_by_visible_text_contains(month_selects[1], RETURN_MONTH_YEAR)
-    select_by_visible_text_contains(time_selects[1], RETURN_TIME)
+    select_by_visible_text_contains(selects[5], RETURN_DAY)
+    select_by_visible_text_contains(selects[6], RETURN_MONTH_YEAR)
+    select_by_visible_text_contains(selects[7], RETURN_TIME)
 
     print("Valores seleccionados:")
-    print("OFICINA:", Select(pickup_location).first_selected_option.text)
-    print("DEVOLUCION:", Select(return_location).first_selected_option.text)
-    print("RECOGIDA DIA:", Select(day_selects[0]).first_selected_option.text)
-    print("RECOGIDA MES:", Select(month_selects[0]).first_selected_option.text)
-    print("RECOGIDA HORA:", Select(time_selects[0]).first_selected_option.text)
-    print("DEV DIA:", Select(day_selects[1]).first_selected_option.text)
-    print("DEV MES:", Select(month_selects[1]).first_selected_option.text)
-    print("DEV HORA:", Select(time_selects[1]).first_selected_option.text)
+    print("OFICINA:", Select(selects[0]).first_selected_option.text)
+    print("DEVOLUCION:", Select(selects[1]).first_selected_option.text)
+    print("RECOGIDA DIA:", Select(selects[2]).first_selected_option.text)
+    print("RECOGIDA MES:", Select(selects[3]).first_selected_option.text)
+    print("RECOGIDA HORA:", Select(selects[4]).first_selected_option.text)
+    print("DEV DIA:", Select(selects[5]).first_selected_option.text)
+    print("DEV MES:", Select(selects[6]).first_selected_option.text)
+    print("DEV HORA:", Select(selects[7]).first_selected_option.text)
 
     click_submit(driver)
-
 
 def extract_price_from_page(driver) -> float:
     WebDriverWait(driver, 30).until(lambda d: "€" in d.page_source)
