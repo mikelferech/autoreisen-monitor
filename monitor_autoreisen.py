@@ -219,8 +219,8 @@ def extract_price_from_page(driver) -> float:
     for i, line in enumerate(lines):
         line_norm = line.casefold()
 
-        if line_norm.startswith("e -") or "seat arona" in line_norm or "arona" in line_norm:
-            context = "\n".join(lines[i:i + 20])
+        if "e - seat arona" in line_norm:
+            context = "\n".join(lines[i:i + 8])
             print("Contexto Grupo E / Arona:")
             print(context)
 
