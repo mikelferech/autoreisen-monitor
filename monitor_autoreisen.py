@@ -103,20 +103,25 @@ def click_submit(driver) -> None:
 
 def fill_search_form(driver) -> None:
     driver.get(URL)
+
     wait = WebDriverWait(driver, 30)
     wait.until(EC.presence_of_element_located((By.TAG_NAME, "select")))
 
     selects = all_selects(driver)
 
-    print(f"Total selects encontrados: {len(selects)}")
+    if len(selects) < 9:
+        raise RuntimeError(f"Solo encuentro {len(selects)} selects")
 
-    for i, select_el in enumerate(selects):
-        print(f"--- SELECT {i} ---")
-        sel = Select(select_el)
-        for option in sel.options:
-            print("-", option.text)
+    select_by_visible_text_contains(selects[1], "Gran Canaria - Aeropuerto")
+    select_by_visible_text_contains(selects[2], "Misma Oficina")
 
-    raise RuntimeError("Debug de desplegables terminado")
+    select_by_visible_text_contains(selects[3], "14")
+    select_by_visible_text_contains(selects[4], "Sep-2026")
+    select_by_visible_text_contains(selects[5], "09:00")
+
+    select_by_visible_text_contains(selects[6], "21")
+    select_by_visible_text_contains(selects[7], "Sep-2026")
+    select_by_visible_text_contains(selects[8], "15:00")
 
 
 def extract_price_from_page(driver) -> float:
