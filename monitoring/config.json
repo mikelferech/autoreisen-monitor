@@ -16,7 +16,7 @@
     "preferredReturnFlight": "VY3271"
   },
   "autoreisen": {
-    "enabled": true,
+    "enabled": false,
     "searchUrl": "https://www.autoreisen.com/alquiler-coches/alquiler-de-coches.php",
     "pickup": "Gran Canaria - Aeropuerto",
     "dropoff": "Gran Canaria - Aeropuerto",

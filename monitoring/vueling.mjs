@@ -11,6 +11,15 @@ async function firstVisible(locator){
   return null;
 }
 
+async function lastVisible(locator){
+  const count=await locator.count().catch(()=>0);
+  for(let i=count-1;i>=0;i--){
+    const item=locator.nth(i);
+    if(await item.isVisible().catch(()=>false))return item;
+  }
+  return null;
+}
+
 async function airportControl(page,kind){
   const origin=kind==='origin';
   const selectors=origin?[
@@ -47,7 +56,6 @@ async function chooseAirport(page,kind,code,name){
   if(await control.isEditable().catch(()=>false)){
     await control.fill(code);
   }else{
-    // Vueling usa un combobox visual y abre un buscador editable en un panel.
     const editableInputs=page.locator('input:not([readonly]):not([disabled])');
     let search=null;
     const count=await editableInputs.count();
@@ -81,73 +89,198 @@ async function chooseAirport(page,kind,code,name){
 function dateLabels(value){
   const date=new Date(`${value}T12:00:00Z`);
   const day=date.getUTCDate();
+  const month=String(date.getUTCMonth()+1).padStart(2,'0');
   const year=date.getUTCFullYear();
   const monthEs=new Intl.DateTimeFormat('es-ES',{month:'long',timeZone:'UTC'}).format(date);
   const monthEn=new Intl.DateTimeFormat('en-US',{month:'long',timeZone:'UTC'}).format(date);
-  return {day,year,monthEs,monthEn};
+  const shortEs=new Intl.DateTimeFormat('es-ES',{month:'short',timeZone:'UTC'}).format(date).replace('.','');
+  const shortEn=new Intl.DateTimeFormat('en-US',{month:'short',timeZone:'UTC'}).format(date).replace('.','');
+  const dd=String(day).padStart(2,'0');
+  return {
+    day,dd,month,year,monthEs,monthEn,shortEs,shortEn,
+    iso:value,
+    es:`${dd}/${month}/${year}`,
+    us:`${month}/${dd}/${year}`
+  };
 }
 
-async function nativeDateInput(page,kind){
-  const selectors=kind==='out'?[
+async function dateControl(page,kind){
+  const out=kind==='out';
+  const selectors=out?[
+    'button[id*="departure-date" i]','button[aria-label*="departure-date" i]',
+    'input[id*="departure-date" i]','input[name*="departure" i]',
     'input[type="date"][name*="depart" i]','input[type="date"][id*="depart" i]',
-    'input[name*="departure" i]','input[id*="departure" i]','input[name*="outbound" i]','input[id*="outbound" i]'
+    'input[name*="outbound" i]','input[id*="outbound" i]'
   ]:[
+    'button[id*="return-date" i]','button[aria-label*="return-date" i]',
+    'input[id*="return-date" i]','input[name*="return" i]',
     'input[type="date"][name*="return" i]','input[type="date"][id*="return" i]',
-    'input[name*="return" i]','input[id*="return" i]','input[name*="inbound" i]','input[id*="inbound" i]'
+    'input[name*="inbound" i]','input[id*="inbound" i]'
   ];
   for(const selector of selectors){
-    const input=await firstVisible(page.locator(selector));
-    if(input)return input;
+    const control=await firstVisible(page.locator(selector));
+    if(control)return control;
   }
-  return null;
+
+  const labelPattern=out?/^(ida|salida|departure|outbound)$/i:/^(vuelta|regreso|return|inbound)$/i;
+  const label=await firstVisible(page.getByText(labelPattern));
+  if(label){
+    for(const xpath of [
+      'xpath=..',
+      'xpath=../..',
+      'xpath=../../..'
+    ]){
+      const parent=label.locator(xpath);
+      const button=await firstVisible(parent.getByRole('button'));
+      if(button)return button;
+      const input=await firstVisible(parent.locator('input'));
+      if(input)return input;
+    }
+  }
+
+  const dateButtons=page.getByRole('button',{name:/^\d{1,2}\/\d{1,2}\/\d{4}$/});
+  return out?firstVisible(dateButtons):lastVisible(dateButtons);
+}
+
+async function forceDateValue(page,kind,value){
+  const labels=dateLabels(value);
+  const out=kind==='out';
+  const selector=out
+    ?'input[id*="depart" i],input[name*="depart" i],input[id*="outbound" i],input[name*="outbound" i]'
+    :'input[id*="return" i],input[name*="return" i],input[id*="inbound" i],input[name*="inbound" i]';
+  const inputs=page.locator(selector);
+  const count=await inputs.count().catch(()=>0);
+  for(let i=0;i<count;i++){
+    const input=inputs.nth(i);
+    const changed=await input.evaluate((element,values)=>{
+      const candidates=[values.iso,values.es,values.us];
+      const type=(element.getAttribute('type')||'').toLowerCase();
+      const chosen=type==='date'?values.iso:candidates[1];
+      try{
+        const descriptor=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value');
+        if(descriptor?.set)descriptor.set.call(element,chosen); else element.value=chosen;
+        element.setAttribute('value',chosen);
+        for(const eventName of ['input','change','blur'])element.dispatchEvent(new Event(eventName,{bubbles:true}));
+        return element.value===chosen||element.getAttribute('value')===chosen;
+      }catch{return false;}
+    },labels).catch(()=>false);
+    if(changed){
+      await page.waitForTimeout(350);
+      const bodyText=await page.locator('body').innerText().catch(()=>'');
+      if(bodyText.includes(labels.es)||bodyText.includes(labels.iso))return true;
+    }
+  }
+  return false;
+}
+
+async function calendarRoots(page){
+  const roots=[];
+  for(const selector of [
+    '[role="dialog"]',
+    '[class*="datepicker" i]',
+    '[class*="date-picker" i]',
+    '[class*="calendar" i]',
+    '[class*="overlay" i]'
+  ]){
+    const loc=page.locator(selector);
+    const count=await loc.count().catch(()=>0);
+    for(let i=0;i<count;i++){
+      const item=loc.nth(i);
+      if(await item.isVisible().catch(()=>false))roots.push(item);
+    }
+  }
+  roots.push(page.locator('body'));
+  return roots;
+}
+
+async function clickExactDate(page,labels){
+  const fullLabelPattern=new RegExp(
+    `${escapeRegExp(labels.iso)}|${escapeRegExp(labels.es)}|${labels.day}\\s+(?:de\\s+)?${escapeRegExp(labels.monthEs)}(?:\\s+de)?\\s+${labels.year}|${escapeRegExp(labels.monthEn)}\\s+${labels.day}[^0-9]+${labels.year}`,
+    'i'
+  );
+  const selectors=[
+    `[data-date="${labels.iso}"]`,`[data-date="${labels.es}"]`,`[data-value="${labels.iso}"]`,`[data-value="${labels.es}"]`,
+    `[datetime="${labels.iso}"]`,`button[aria-label*="${labels.es}"]`,`button[aria-label*="${labels.iso}"]`,
+    `[role="gridcell"][aria-label*="${labels.es}"]`,`[role="gridcell"][aria-label*="${labels.iso}"]`
+  ];
+  for(const selector of selectors){
+    const item=await firstVisible(page.locator(selector));
+    if(item){await item.click({force:true});await page.waitForTimeout(450);return true;}
+  }
+  const named=await firstVisible(page.getByRole('button',{name:fullLabelPattern}));
+  if(named){await named.click({force:true});await page.waitForTimeout(450);return true;}
+  const cell=await firstVisible(page.locator('[role="gridcell"]').filter({hasText:fullLabelPattern}));
+  if(cell){await cell.click({force:true});await page.waitForTimeout(450);return true;}
+  return false;
+}
+
+async function targetMonthVisible(page,labels){
+  const pattern=new RegExp(`(?:${escapeRegExp(labels.monthEs)}|${escapeRegExp(labels.monthEn)}|${escapeRegExp(labels.shortEs)}|${escapeRegExp(labels.shortEn)})\\s*[-/]?\\s*${labels.year}`,'i');
+  const textCandidates=page.getByText(pattern);
+  return Boolean(await firstVisible(textCandidates));
+}
+
+async function clickDayInsideTargetMonth(page,labels){
+  const monthPattern=new RegExp(`(?:${escapeRegExp(labels.monthEs)}|${escapeRegExp(labels.monthEn)}|${escapeRegExp(labels.shortEs)}|${escapeRegExp(labels.shortEn)})\\s*[-/]?\\s*${labels.year}`,'i');
+  const monthHeads=page.getByText(monthPattern);
+  const headCount=await monthHeads.count().catch(()=>0);
+  for(let i=0;i<headCount;i++){
+    const head=monthHeads.nth(i);
+    if(!await head.isVisible().catch(()=>false))continue;
+    for(const xpath of ['xpath=..','xpath=../..','xpath=../../..','xpath=../../../..']){
+      const box=head.locator(xpath);
+      const dayButton=await firstVisible(box.getByRole('button',{name:new RegExp(`^0?${labels.day}$`)}));
+      if(dayButton){await dayButton.click({force:true});await page.waitForTimeout(450);return true;}
+      const dayCell=await firstVisible(box.locator('[role="gridcell"]').filter({hasText:new RegExp(`^\\s*0?${labels.day}\\s*$`)}));
+      if(dayCell){await dayCell.click({force:true});await page.waitForTimeout(450);return true;}
+    }
+  }
+  return false;
+}
+
+async function clickNextMonth(page){
+  const roots=await calendarRoots(page);
+  const pattern=/chevron_right|navigate_next|mes siguiente|siguiente mes|next month|siguiente|›|»/i;
+  for(const root of roots){
+    const candidates=[
+      root.getByRole('button',{name:pattern}),
+      root.locator('button').filter({hasText:pattern}),
+      root.locator('[aria-label*="next" i],[aria-label*="siguiente" i],[title*="next" i],[title*="siguiente" i]')
+    ];
+    for(const candidate of candidates){
+      const button=await lastVisible(candidate);
+      if(button){await button.click({force:true});await page.waitForTimeout(350);return true;}
+    }
+  }
+  return false;
 }
 
 async function chooseDate(page,kind,value){
-  const input=await nativeDateInput(page,kind);
-  if(input){
-    const type=await input.getAttribute('type').catch(()=>null);
-    if(type==='date'&&await input.isEditable().catch(()=>false)){
-      await input.fill(value);
-      return;
-    }
-    // Algunos campos son readonly: se abre el calendario al pulsarlos.
-    await input.click({force:true}).catch(()=>{});
-  }else{
-    const button=kind==='out'
-      ?await firstVisible(page.getByRole('button',{name:/fecha de ida|salida|departure|outbound/i}))
-      :await firstVisible(page.getByRole('button',{name:/fecha de vuelta|regreso|return|inbound/i}));
-    if(!button)throw new Error(`Vueling: no se encontró el control de fecha de ${kind==='out'?'ida':'vuelta'}.`);
-    await button.click({force:true});
+  const labels=dateLabels(value);
+  const control=await dateControl(page,kind);
+  if(!control)throw new Error(`Vueling: no se encontró el control de fecha de ${kind==='out'?'ida':'vuelta'}.`);
+
+  const type=await control.getAttribute('type').catch(()=>null);
+  if(type==='date'&&await control.isEditable().catch(()=>false)){
+    await control.fill(value);
+    return;
   }
 
-  const {day,year,monthEs,monthEn}=dateLabels(value);
-  const exactSelectors=[
-    `[data-date="${value}"]`,
-    `[data-value="${value}"]`,
-    `button[aria-label*="${day}"][aria-label*="${year}"]`,
-    `[role="gridcell"][aria-label*="${day}"][aria-label*="${year}"]`
-  ];
-  for(let attempt=0;attempt<20;attempt++){
-    for(const selector of exactSelectors){
-      const items=page.locator(selector);
-      const count=await items.count().catch(()=>0);
-      for(let i=0;i<count;i++){
-        const item=items.nth(i);
-        if(!await item.isVisible().catch(()=>false))continue;
-        const label=((await item.getAttribute('aria-label').catch(()=>''))||'')+' '+((await item.textContent().catch(()=>''))||'');
-        if(new RegExp(`${monthEs}|${monthEn}`,'i').test(label)||selector.includes('data-')){
-          await item.click({force:true});
-          await page.waitForTimeout(500);
-          return;
-        }
-      }
-    }
-    const next=await firstVisible(page.getByRole('button',{name:/mes siguiente|siguiente mes|next month|siguiente/i}));
-    if(!next)break;
-    await next.click({force:true});
-    await page.waitForTimeout(250);
+  // Primer intento: actualizar el input oculto/readonly y disparar los eventos de Angular.
+  if(await forceDateValue(page,kind,value))return;
+
+  await control.click({force:true});
+  await page.waitForTimeout(700);
+  await snapshot(page,`vueling-calendario-${kind}-abierto`);
+
+  for(let attempt=0;attempt<18;attempt++){
+    if(await clickExactDate(page,labels))return;
+    if(await targetMonthVisible(page,labels)&&await clickDayInsideTargetMonth(page,labels))return;
+    if(!await clickNextMonth(page))break;
   }
-  throw new Error(`Vueling: no se pudo seleccionar la fecha ${value} en el calendario.`);
+
+  await snapshot(page,`vueling-calendario-${kind}-error`);
+  throw new Error(`Vueling: no se pudo seleccionar la fecha ${value}. Se han guardado capturas y HTML del calendario para diagnóstico.`);
 }
 
 async function setAdults(page,wanted){
@@ -162,7 +295,6 @@ async function setAdults(page,wanted){
     section.getByRole('button',{name:/añadir|sumar|increase|plus|\+/i}).last(),
     section.locator('button').last()
   ];
-  // El buscador suele partir de 1 adulto.
   for(let current=1;current<wanted;current++){
     if(!await clickFirst(page,plusCandidates,{force:true}))break;
     await page.waitForTimeout(250);
@@ -205,7 +337,7 @@ export async function monitorVueling(browser,config){
       await setAdults(page,config.adults||2);
       await snapshot(page,'vueling-formulario-completado');
       if(!await clickFirst(page,[
-        page.getByRole('button',{name:/buscar vuelos|buscar|search flights/i}).first(),
+        page.getByRole('button',{name:/buscar vuelos|buscar|search flights|fc-booking-booking-cta-label/i}).first(),
         page.locator('button[type="submit"]').first()
       ],{force:true}))throw new Error('Vueling: no se encontró el botón Buscar vuelos.');
       await page.waitForTimeout(9000);
