@@ -1,0 +1,14 @@
+{
+  "name": "mfe-viajes-monitores",
+  "private": true,
+  "version": "2.0.4",
+  "type": "module",
+  "scripts": {
+    "monitor": "node monitor.mjs",
+    "monitor:vueling": "node monitor.mjs vueling",
+    "monitor:autoreisen": "node monitor.mjs autoreisen"
+  },
+  "dependencies": {
+    "playwright": "1.54.1"
+  }
+}

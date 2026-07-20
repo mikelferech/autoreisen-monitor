@@ -1,0 +1,28 @@
+{
+  "vueling": {
+    "enabled": true,
+    "searchUrl": "https://www.vueling.com/es",
+    "origin": "BIO",
+    "originName": "Bilbao",
+    "destination": "LPA",
+    "destinationName": "Gran Canaria",
+    "departureDate": "2026-09-14",
+    "returnDate": "2026-09-21",
+    "adults": 2,
+    "fare": "Fly Light",
+    "bagsPerDirection": 1,
+    "bagKg": 25,
+    "preferredOutboundFlight": "VY3272",
+    "preferredReturnFlight": "VY3271"
+  },
+  "autoreisen": {
+    "enabled": true,
+    "searchUrl": "https://www.autoreisen.com/alquiler-coches/alquiler-de-coches.php",
+    "pickup": "Gran Canaria - Aeropuerto",
+    "dropoff": "Gran Canaria - Aeropuerto",
+    "pickupAt": "2026-09-14T09:00:00+01:00",
+    "dropoffAt": "2026-09-21T15:00:00+01:00",
+    "group": "E",
+    "model": "Seat Arona"
+  }
+}
