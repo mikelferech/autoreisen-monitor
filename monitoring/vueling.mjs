@@ -104,42 +104,54 @@ function dateLabels(value){
   };
 }
 
-async function dateControl(page,kind){
+async function dateControl(page,kind,{timeout=8000}={}){
   const out=kind==='out';
   const selectors=out?[
+    '#outboundDate',
+    '.vy-date-picker-selector_input-outbound input',
+    'label[for="outboundDate"]',
+    '.vy-date-picker-selector_input-outbound',
     'button[id*="departure-date" i]','button[aria-label*="departure-date" i]',
     'input[id*="departure-date" i]','input[name*="departure" i]',
     'input[type="date"][name*="depart" i]','input[type="date"][id*="depart" i]',
     'input[name*="outbound" i]','input[id*="outbound" i]'
   ]:[
+    '#returnDate',
+    '.vy-date-picker-selector_input-return input',
+    'label[for="returnDate"]',
+    '.vy-date-picker-selector_input-return',
     'button[id*="return-date" i]','button[aria-label*="return-date" i]',
     'input[id*="return-date" i]','input[name*="return" i]',
     'input[type="date"][name*="return" i]','input[type="date"][id*="return" i]',
     'input[name*="inbound" i]','input[id*="inbound" i]'
   ];
-  for(const selector of selectors){
-    const control=await firstVisible(page.locator(selector));
-    if(control)return control;
-  }
 
-  const labelPattern=out?/^(ida|salida|departure|outbound)$/i:/^(vuelta|regreso|return|inbound)$/i;
-  const label=await firstVisible(page.getByText(labelPattern));
-  if(label){
-    for(const xpath of [
-      'xpath=..',
-      'xpath=../..',
-      'xpath=../../..'
-    ]){
-      const parent=label.locator(xpath);
-      const button=await firstVisible(parent.getByRole('button'));
-      if(button)return button;
-      const input=await firstVisible(parent.locator('input'));
-      if(input)return input;
+  const deadline=Date.now()+timeout;
+  while(Date.now()<deadline){
+    for(const selector of selectors){
+      const loc=page.locator(selector);
+      const control=await firstVisible(loc);
+      if(control)return control;
     }
-  }
 
-  const dateButtons=page.getByRole('button',{name:/^\d{1,2}\/\d{1,2}\/\d{4}$/});
-  return out?firstVisible(dateButtons):lastVisible(dateButtons);
+    const labelPattern=out?/^(ida|salida|departure|outbound)$/i:/^(vuelta|regreso|return|inbound)$/i;
+    const label=await firstVisible(page.getByText(labelPattern));
+    if(label){
+      for(const xpath of ['xpath=..','xpath=../..','xpath=../../..']){
+        const parent=label.locator(xpath);
+        const button=await firstVisible(parent.getByRole('button'));
+        if(button)return button;
+        const input=await firstVisible(parent.locator('input'));
+        if(input)return input;
+      }
+    }
+
+    const dateButtons=page.getByRole('button',{name:/^\d{1,2}\/\d{1,2}\/\d{4}$/});
+    const dateButton=out?await firstVisible(dateButtons):await lastVisible(dateButtons);
+    if(dateButton)return dateButton;
+    await page.waitForTimeout(250);
+  }
+  return null;
 }
 
 async function forceDateValue(page,kind,value){
@@ -170,6 +182,41 @@ async function forceDateValue(page,kind,value){
       const attr=await input.getAttribute('value').catch(()=>"");
       if([labels.iso,labels.es,labels.us].includes(current)||[labels.iso,labels.es,labels.us].includes(attr||""))return true;
     }
+  }
+  return false;
+}
+
+async function forceDatePair(page,outboundValue,returnValue){
+  const outLabels=dateLabels(outboundValue);
+  const returnLabels=dateLabels(returnValue);
+  const deadline=Date.now()+10000;
+  while(Date.now()<deadline){
+    const result=await page.evaluate(({outValue,returnValue})=>{
+      const outbound=document.querySelector('#outboundDate');
+      const inbound=document.querySelector('#returnDate');
+      if(!outbound||!inbound)return null;
+      const setNative=(element,value)=>{
+        try{
+          const descriptor=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value');
+          if(descriptor?.set)descriptor.set.call(element,value);else element.value=value;
+          element.setAttribute('value',value);
+          for(const name of ['input','change'])element.dispatchEvent(new Event(name,{bubbles:true,composed:true}));
+          return element.value;
+        }catch{return '';}
+      };
+      const out=setNative(outbound,outValue);
+      const ret=setNative(inbound,returnValue);
+      outbound.dispatchEvent(new FocusEvent('blur',{bubbles:true}));
+      inbound.dispatchEvent(new FocusEvent('blur',{bubbles:true}));
+      return {out,ret};
+    },{outValue:outLabels.es,returnValue:returnLabels.es}).catch(()=>null);
+    if(result){
+      await page.waitForTimeout(900);
+      const actualOut=await page.locator('#outboundDate').inputValue().catch(()=>result.out||'');
+      const actualReturn=await page.locator('#returnDate').inputValue().catch(()=>result.ret||'');
+      if(actualOut===outLabels.es&&actualReturn===returnLabels.es)return true;
+    }
+    await page.waitForTimeout(250);
   }
   return false;
 }
@@ -259,17 +306,41 @@ async function clickNextMonth(page){
 async function chooseDate(page,kind,value){
   const labels=dateLabels(value);
   await acceptCookies(page,{timeout:5000});
-  const control=await dateControl(page,kind);
-  if(!control)throw new Error(`Vueling: no se encontró el control de fecha de ${kind==='out'?'ida':'vuelta'}.`);
+
+  // Vueling reconstruye el componente de fechas después de fijar la ida.
+  // Por eso intentamos primero escribir el input real (#outboundDate/#returnDate)
+  // aunque durante unos instantes no exista un control visible.
+  const directDeadline=Date.now()+8000;
+  while(Date.now()<directDeadline){
+    if(await forceDateValue(page,kind,value))return;
+    await page.waitForTimeout(250);
+  }
+
+  // Al elegir la ida, Vueling puede abrir automáticamente el calendario de vuelta.
+  // Si ya hay un calendario visible, seleccionamos la fecha sin exigir que el input
+  // de vuelta haya reaparecido todavía en el DOM.
+  const visibleCalendar=Boolean(await firstVisible(page.locator(
+    '[role="dialog"],[class*="datepicker" i],[class*="date-picker" i],[class*="calendar" i]'
+  )));
+  if(visibleCalendar){
+    for(let attempt=0;attempt<18;attempt++){
+      if(await clickExactDate(page,labels))return;
+      if(await targetMonthVisible(page,labels)&&await clickDayInsideTargetMonth(page,labels))return;
+      if(!await clickNextMonth(page))break;
+    }
+  }
+
+  const control=await dateControl(page,kind,{timeout:10000});
+  if(!control){
+    await snapshot(page,`vueling-control-fecha-${kind}-no-encontrado`);
+    throw new Error(`Vueling: no se encontró el control de fecha de ${kind==='out'?'ida':'vuelta'}. Se ha guardado una captura y el HTML para diagnóstico.`);
+  }
 
   const type=await control.getAttribute('type').catch(()=>null);
   if(type==='date'&&await control.isEditable().catch(()=>false)){
     await control.fill(value);
     return;
   }
-
-  // Primer intento: actualizar el input oculto/readonly y disparar los eventos de Angular.
-  if(await forceDateValue(page,kind,value))return;
 
   await control.click({force:true});
   await page.waitForTimeout(700);
@@ -337,8 +408,16 @@ export async function monitorVueling(browser,config){
     if(!hasResults){
       await chooseAirport(page,'origin',config.origin,config.originName);
       await chooseAirport(page,'destination',config.destination,config.destinationName);
-      await chooseDate(page,'out',config.departureDate);
-      await chooseDate(page,'return',config.returnDate);
+
+      // Fijamos ida y vuelta juntas. Vueling reconstruye el componente al
+      // modificar la ida y, en algunas ejecuciones, #returnDate desaparece
+      // durante unos segundos. Escribir ambas en una sola operación evita
+      // esa carrera. Si la web no lo acepta, se usa el calendario como respaldo.
+      const pairSet=await forceDatePair(page,config.departureDate,config.returnDate);
+      if(!pairSet){
+        await chooseDate(page,'out',config.departureDate);
+        await chooseDate(page,'return',config.returnDate);
+      }
       await setAdults(page,config.adults||2);
       await acceptCookies(page,{timeout:2500});
       const expectedOut=dateLabels(config.departureDate).es;
