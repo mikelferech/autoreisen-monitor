@@ -29,7 +29,10 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: monitoring/package-lock.json
-      - run: npm ci
+      - name: Configurar registro público de npm
+        run: npm config set registry https://registry.npmjs.org/
+      - name: Instalar dependencias
+        run: npm ci --no-audit --no-fund
       - run: npx playwright install --with-deps chromium
       - run: npm run monitor
       - name: Guardar capturas para diagnóstico
