@@ -1,17 +1,16 @@
-name: Seguimientos diarios MFE Viajes
+name: Seguimiento diario Vueling MFE Viajes
 
 on:
   workflow_dispatch:
   schedule:
-    # 05:00 UTC = 07:00 en España peninsular durante horario de verano.
-    # En invierno se ejecutará a las 06:00 peninsular. Ajusta el cron cuando lo necesites.
-    - cron: "0 5 * * *"
+    # 05:10 UTC: diez minutos después del monitor AutoReisen.
+    - cron: "10 5 * * *"
 
 permissions:
   contents: read
 
 jobs:
-  precios:
+  vueling:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     defaults:
@@ -21,7 +20,6 @@ jobs:
       MFE_WORKER_URL: ${{ secrets.MFE_WORKER_URL }}
       MFE_MONITOR_SECRET: ${{ secrets.MFE_MONITOR_SECRET }}
       VUELING_SEARCH_URL: ${{ vars.VUELING_SEARCH_URL }}
-      AUTOREISEN_SEARCH_URL: ${{ vars.AUTOREISEN_SEARCH_URL }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -33,13 +31,15 @@ jobs:
         run: npm config set registry https://registry.npmjs.org/
       - name: Instalar dependencias
         run: npm ci --no-audit --no-fund
-      - run: npx playwright install --with-deps chromium
-      - run: npm run monitor
+      - name: Instalar Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Consultar Vueling
+        run: npm run monitor:vueling
       - name: Guardar capturas para diagnóstico
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: seguimiento-${{ github.run_number }}
+          name: vueling-${{ github.run_number }}
           path: monitoring/artifacts/
           if-no-files-found: ignore
           retention-days: 14

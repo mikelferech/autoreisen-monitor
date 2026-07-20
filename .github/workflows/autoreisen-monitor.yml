@@ -2,7 +2,7 @@ name: AutoReisen price monitor
 
 on:
   schedule:
-    # Todos los días a las 09:00 de Madrid en horario de verano equivale a 07:00 UTC.
+    # 05:00 UTC = 07:00 peninsular durante el horario de verano.
     - cron: "0 5 * * *"
   workflow_dispatch:
 
@@ -12,7 +12,7 @@ permissions:
 jobs:
   check-price:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -28,7 +28,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run monitor
+      - name: Run AutoReisen monitor
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -42,7 +42,14 @@ jobs:
           RETURN_TIME: "15:00"
         run: python monitor_autoreisen.py
 
+      - name: Send AutoReisen price to MFE Viajes
+        env:
+          MFE_WORKER_URL: ${{ secrets.MFE_WORKER_URL }}
+          MFE_MONITOR_SECRET: ${{ secrets.MFE_MONITOR_SECRET }}
+        run: python post_autoreisen_to_worker.py
+
       - name: Save price history
+        if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
