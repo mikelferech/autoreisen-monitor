@@ -20,15 +20,47 @@ export async function snapshot(page,name){
   await fs.writeFile(path.join(ARTIFACTS,`${name}.html`),await page.content().catch(()=>''),'utf8').catch(()=>{});
 }
 
-export async function acceptCookies(page){
-  for(const label of [/permitir todas/i,/aceptar todas/i,/aceptar/i,/allow all/i,/accept all/i,/consentir/i]){
-    const btn=page.getByRole('button',{name:label}).first();
-    if(await btn.isVisible().catch(()=>false)){
-      await btn.click({force:true}).catch(()=>{});
-      await page.waitForTimeout(700);
-      break;
-    }
+async function clickFirstVisible(locator){
+  const count=await locator.count().catch(()=>0);
+  for(let i=0;i<count;i++){
+    const item=locator.nth(i);
+    if(!await item.isVisible().catch(()=>false))continue;
+    await item.click({force:true}).catch(()=>{});
+    return true;
   }
+  return false;
+}
+
+export async function acceptCookies(page,{timeout=12000}={}){
+  // OneTrust aparece de forma asíncrona en Vueling. Esperamos expresamente
+  // tanto el banner inicial (“OK, las acepto”) como el panel avanzado.
+  const deadline=Date.now()+timeout;
+  let clicked=false;
+  while(Date.now()<deadline){
+    const candidates=[
+      page.locator('#onetrust-accept-btn-handler'),
+      page.locator('#accept-recommended-btn-handler'),
+      page.getByRole('button',{name:/^ok,?\s*(?:las\s+)?acepto$/i}),
+      page.getByRole('button',{name:/^aceptar todas(?: las)? cookies$/i}),
+      page.getByRole('button',{name:/^(?:allow|accept) all(?: cookies)?$/i})
+    ];
+    let didClick=false;
+    for(const candidate of candidates){
+      if(await clickFirstVisible(candidate)){
+        clicked=true;
+        didClick=true;
+        await page.waitForTimeout(900);
+        break;
+      }
+    }
+
+    const overlayVisible=await page.locator(
+      '#onetrust-banner-sdk:visible,#onetrust-pc-sdk:visible,.onetrust-pc-dark-filter:visible'
+    ).count().catch(()=>0);
+    if(!overlayVisible&&!didClick)return clicked;
+    await page.waitForTimeout(250);
+  }
+  return clicked;
 }
 
 export async function fillFirst(page,selectors,value){

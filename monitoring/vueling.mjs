@@ -166,8 +166,9 @@ async function forceDateValue(page,kind,value){
     },labels).catch(()=>false);
     if(changed){
       await page.waitForTimeout(350);
-      const bodyText=await page.locator('body').innerText().catch(()=>'');
-      if(bodyText.includes(labels.es)||bodyText.includes(labels.iso))return true;
+      const current=await input.inputValue().catch(()=>"");
+      const attr=await input.getAttribute('value').catch(()=>"");
+      if([labels.iso,labels.es,labels.us].includes(current)||[labels.iso,labels.es,labels.us].includes(attr||""))return true;
     }
   }
   return false;
@@ -257,6 +258,7 @@ async function clickNextMonth(page){
 
 async function chooseDate(page,kind,value){
   const labels=dateLabels(value);
+  await acceptCookies(page,{timeout:5000});
   const control=await dateControl(page,kind);
   if(!control)throw new Error(`Vueling: no se encontró el control de fecha de ${kind==='out'?'ida':'vuelta'}.`);
 
@@ -324,8 +326,11 @@ export async function monitorVueling(browser,config){
   const page=await context.newPage();
   try{
     await page.goto(process.env.VUELING_SEARCH_URL||config.searchUrl,{waitUntil:'domcontentloaded',timeout:90000});
-    await acceptCookies(page);
     await waitNetwork(page);
+    await acceptCookies(page,{timeout:12000});
+    await waitNetwork(page);
+    // OneTrust puede volver a pintar el panel después de cargar contenido diferido.
+    await acceptCookies(page,{timeout:4000});
     await snapshot(page,'vueling-inicio');
 
     const hasResults=await page.getByText(/selecciona tu vuelo|elige tu vuelo|flight selection/i).first().isVisible().catch(()=>false);
@@ -335,6 +340,15 @@ export async function monitorVueling(browser,config){
       await chooseDate(page,'out',config.departureDate);
       await chooseDate(page,'return',config.returnDate);
       await setAdults(page,config.adults||2);
+      await acceptCookies(page,{timeout:2500});
+      const expectedOut=dateLabels(config.departureDate).es;
+      const expectedReturn=dateLabels(config.returnDate).es;
+      const actualOut=await page.locator('#outboundDate').inputValue().catch(()=>"");
+      const actualReturn=await page.locator('#returnDate').inputValue().catch(()=>"");
+      if(actualOut!==expectedOut||actualReturn!==expectedReturn){
+        await snapshot(page,'vueling-fechas-no-confirmadas');
+        throw new Error(`Vueling: las fechas no quedaron confirmadas en el formulario (ida ${actualOut||'vacía'}, vuelta ${actualReturn||'vacía'}).`);
+      }
       await snapshot(page,'vueling-formulario-completado');
       if(!await clickFirst(page,[
         page.getByRole('button',{name:/buscar vuelos|buscar|search flights|fc-booking-booking-cta-label/i}).first(),
