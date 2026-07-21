@@ -20,9 +20,10 @@
     "searchUrl": "https://www.autoreisen.com/alquiler-coches/alquiler-de-coches.php",
     "pickup": "Gran Canaria - Aeropuerto",
     "dropoff": "Gran Canaria - Aeropuerto",
-    "pickupAt": "2026-09-14T09:00:00+01:00",
-    "dropoffAt": "2026-09-21T15:00:00+01:00",
+    "pickupAt": "2026-09-14T09:00",
+    "dropoffAt": "2026-09-21T15:00",
     "group": "E",
-    "model": "Seat Arona"
+    "model": "Seat Arona o similar",
+    "reservedPrice": 137.03
   }
 }
