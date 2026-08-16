@@ -33,6 +33,7 @@
     "telegramNotifyError": true,
     "telegramNotifyRecovery": true,
     "telegramMinDropAmount": 0,
-    "telegramMinDropPercent": 0
+    "telegramMinDropPercent": 0,
+    "telegramNotifyEveryCheck": true
   }
 }
