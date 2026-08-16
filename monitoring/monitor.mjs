@@ -1,10 +1,10 @@
 import fs from 'node:fs/promises';
 import {chromium} from 'playwright';
-import {daysBetween,hoursSince,isoNow,moneyText,postResult,readLatest,sendTelegram} from './lib.mjs';
+import {daysBetween,isoNow,moneyText,postResult,readLatest,sendTelegram} from './lib.mjs';
 import {monitorAutoReisen} from './autoreisen.mjs';
 
 const document=JSON.parse(await fs.readFile(new URL('./config.json',import.meta.url),'utf8'));
-const config={enabled:true,intervalHours:24,telegramEnabled:true,telegramNotifyEveryCheck:true,telegramNotifyPriceDrop:true,telegramNotifyBelowReserved:true,telegramNotifyAvailability:true,telegramNotifyError:true,telegramNotifyRecovery:true,telegramMinDropAmount:0,telegramMinDropPercent:0,...(document.autoreisen||{})};
+const config={enabled:true,telegramEnabled:true,telegramNotifyEveryCheck:true,telegramNotifyPriceDrop:true,telegramNotifyBelowReserved:true,telegramNotifyAvailability:true,telegramNotifyError:true,telegramNotifyRecovery:true,telegramMinDropAmount:0,telegramMinDropPercent:0,...(document.autoreisen||{})};
 const force=/^(1|true|yes)$/i.test(String(process.env.MFE_FORCE_RUN||''));
 const telegramTest=/^(1|true|yes)$/i.test(String(process.env.MFE_TEST_TELEGRAM||''));
 
@@ -16,11 +16,28 @@ if(telegramTest){
 }
 if(!config.enabled){console.log('Monitor AutoReisen desactivado desde MFE Viajes.');process.exit(0);}
 
-const previous=await readLatest();
-const interval=Math.max(1,Number(config.intervalHours)||24);
-if(!force&&previous.result?.checkedAt&&hoursSince(previous.result.checkedAt)<interval){
-  console.log(`Todavía no toca comprobar AutoReisen. Intervalo: ${interval} h.`);process.exit(0);
+const SCHEDULE_TIMEZONE='Europe/Madrid';
+const SCHEDULE_HOUR=7;
+const SCHEDULE_MINUTE=30;
+const scheduledExpression=String(process.env.MFE_SCHEDULE_EVENT||'').trim();
+function madridUtcOffsetHours(date=new Date()){
+  const part=new Intl.DateTimeFormat('en-US',{timeZone:SCHEDULE_TIMEZONE,timeZoneName:'shortOffset',hour:'2-digit'}).formatToParts(date).find(x=>x.type==='timeZoneName')?.value||'GMT+1';
+  const m=part.match(/GMT([+-])(\d{1,2})(?::(\d{2}))?/i);
+  if(!m)return 1;const sign=m[1]==='-'?-1:1;return sign*(Number(m[2])+(Number(m[3]||0)/60));
 }
+function expectedDailyCron(date=new Date()){
+  const offset=madridUtcOffsetHours(date);const utcHour=(SCHEDULE_HOUR-offset+24)%24;
+  return `${SCHEDULE_MINUTE} ${Math.trunc(utcHour)} * * *`;
+}
+if(!force){
+  const expected=expectedDailyCron();
+  if(!scheduledExpression||scheduledExpression!==expected){
+    console.log(`Ejecución programada descartada. La comprobación automática es diaria a las 07:30 (${SCHEDULE_TIMEZONE}). Cron esperado hoy: ${expected}. Evento recibido: ${scheduledExpression||'ninguno'}.`);
+    process.exit(0);
+  }
+  console.log(`Comprobación automática diaria de las 07:30 (${SCHEDULE_TIMEZONE}).`);
+}
+const previous=await readLatest();
 
 const browser=await chromium.launch({headless:true});
 try{
