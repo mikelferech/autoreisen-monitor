@@ -1,58 +1,57 @@
-name: AutoReisen price monitor
+name: AutoReisen · MFE Viajes
 
 on:
   schedule:
-    # 05:00 UTC = 07:00 peninsular durante el horario de verano.
-    - cron: "0 5 * * *"
+    - cron: '17 * * * *'
   workflow_dispatch:
+    inputs:
+      force:
+        description: 'Forzar comprobación aunque todavía no toque'
+        required: false
+        default: true
+        type: boolean
+      telegram_test:
+        description: 'Enviar solo un mensaje de prueba por Telegram'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: autoreisen-monitor
+  cancel-in-progress: false
 
 jobs:
-  check-price:
+  monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: monitoring
+    env:
+      MFE_WORKER_URL: ${{ secrets.MFE_WORKER_URL }}
+      MFE_MONITOR_SECRET: ${{ secrets.MFE_MONITOR_SECRET }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || secrets.TELEGRAM_TOKEN || secrets.BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID || secrets.TELEGRAM_CHAT || secrets.CHAT_ID }}
+      MFE_FORCE_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.force || false }}
+      MFE_TEST_TELEGRAM: ${{ github.event_name == 'workflow_dispatch' && inputs.telegram_test || false }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          python-version: "3.12"
-
-      - name: Install Chrome
-        uses: browser-actions/setup-chrome@v1
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Run AutoReisen monitor
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          BASELINE_PRICE: "137.03"
-          ALWAYS_NOTIFY: "true"
-          PICKUP_DAY: "14"
-          PICKUP_MONTH_YEAR: "Sep-2026"
-          PICKUP_TIME: "09:00"
-          RETURN_DAY: "21"
-          RETURN_MONTH_YEAR: "Sep-2026"
-          RETURN_TIME: "15:00"
-        run: python monitor_autoreisen.py
-
-      - name: Send AutoReisen price to MFE Viajes
-        env:
-          MFE_WORKER_URL: ${{ secrets.MFE_WORKER_URL }}
-          MFE_MONITOR_SECRET: ${{ secrets.MFE_MONITOR_SECRET }}
-        run: python post_autoreisen_to_worker.py
-
-      - name: Save price history
-        if: always()
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add price_state.json || true
-          git commit -m "Update AutoReisen price" || echo "No changes"
-          git push || true
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: monitoring/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: node monitor.mjs
+      - name: Guardar diagnóstico si falla
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autoreisen-diagnostico
+          path: monitoring/artifacts/
+          if-no-files-found: ignore
+          retention-days: 7
