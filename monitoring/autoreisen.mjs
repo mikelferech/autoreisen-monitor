@@ -1,4 +1,4 @@
-// MFE_AUTOREISEN_AUTOMATION_VERSION: 2.1.52
+// MFE_AUTOREISEN_AUTOMATION_VERSION: 2.1.53
 import {acceptCookies,clickFirst,daysBetween,fillFirst,isoNow,money,snapshot} from './lib.mjs';
 
 const MONTH_TOKENS={
@@ -6,8 +6,15 @@ const MONTH_TOKENS={
   5:['may','mayo'],6:['jun','june','junio'],7:['jul','july','julio'],8:['ago','aug','august','agosto'],
   9:['sep','sept','september','septiembre'],10:['oct','october','octubre'],11:['nov','november','noviembre'],12:['dic','dec','december','diciembre']
 };
-function normalize(value=''){return String(value).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ' ).trim();}
-function dateParts(value){const d=new Date(value);return {date:value.slice(0,10),day:String(d.getDate()).padStart(2,'0'),month:d.getMonth()+1,year:String(d.getFullYear()),hour:String(d.getHours()).padStart(2,'0'),minute:String(d.getMinutes()).padStart(2,'0')};}
+const OFFICE_IDS=new Map([
+  ['gran canaria aeropuerto','18'],['gran canaria airport','18'],['gran canaria aerodrome','18'],['lpa','18']
+]);
+const MODEL_STOPWORDS=new Set(['o','or','oder','ou','similar','similaire','similarer','similaren','similarmente','tsi','reference']);
+
+function normalize(value=''){return String(value).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();}
+function dateParts(value){
+  const raw=String(value||'');const d=new Date(raw);return {date:raw.slice(0,10),day:String(d.getDate()).padStart(2,'0'),month:d.getMonth()+1,year:String(d.getFullYear()),hour:String(d.getHours()).padStart(2,'0'),minute:String(d.getMinutes()).padStart(2,'0')};
+}
 function resultsEntryUrl(raw){
   try{
     const url=new URL(String(raw||'https://www.autoreisen.com/alquiler-coches/alquiler-de-coches.php'));
@@ -17,54 +24,20 @@ function resultsEntryUrl(raw){
     url.search='';url.hash='';return url.toString();
   }catch{return 'https://www.autoreisen.com/alquiler-coches/tarifas-flota.php';}
 }
-async function selectByPredicate(select,predicate){
-  const options=await select.locator('option').evaluateAll(nodes=>nodes.map(o=>({value:o.value,text:(o.textContent||'').trim()}))).catch(()=>[]);
-  const match=options.find(predicate);if(!match)return false;await select.selectOption(match.value);return true;
+function officeId(label=''){
+  const text=normalize(label).replace(/\bde\b/g,' ').replace(/\s+/g,' ').trim();
+  for(const [key,value] of OFFICE_IDS){if(text===key||text.includes(key))return value;}
+  return '';
 }
-async function selectOffice(select,label){
-  const wanted=normalize(label);const words=wanted.split(' ').filter(x=>x.length>2);
-  return selectByPredicate(select,o=>{const text=normalize(o.text);return words.length?words.every(w=>text.includes(w)):text.includes(wanted);});
+function directResultUrl(config){
+  const pick=dateParts(config.pickupAt),drop=dateParts(config.dropoffAt);const url=new URL(resultsEntryUrl(process.env.AUTOREISEN_SEARCH_URL||config.searchUrl));
+  const rec=officeId(config.pickup),dev=officeId(config.dropoff);
+  if(rec)url.searchParams.set('ofi_rec',rec);if(dev)url.searchParams.set('ofi_dev',dev);
+  url.searchParams.set('dia_inicio',String(Number(pick.day)));url.searchParams.set('mes_inicio',`${pick.month}-${pick.year}`);
+  url.searchParams.set('dia_final',String(Number(drop.day)));url.searchParams.set('mes_final',`${drop.month}-${drop.year}`);url.searchParams.set('fin','1');
+  return url.toString();
 }
-async function selectDay(select,part){return selectByPredicate(select,o=>String(o.text).trim().replace(/^0/,'')===String(Number(part.day)));}
-async function selectMonth(select,part){const tokens=MONTH_TOKENS[part.month]||[];return selectByPredicate(select,o=>{const text=normalize(o.text).replace(/\s+/g,'');return text.includes(part.year)&&tokens.some(t=>text.includes(t));});}
-async function selectTime(select,part){const wanted=`${part.hour}:${part.minute}`;const byExact=await selectByPredicate(select,o=>String(o.text).trim()===wanted);if(byExact)return true;return selectByPredicate(select,o=>String(o.text).trim().startsWith(`${part.hour}:`));}
-async function fillLegacySelectForm(page,cfg){
-  const selects=page.locator('select:visible');const count=await selects.count();if(count<8)return false;
-  const pick=dateParts(cfg.pickupAt),drop=dateParts(cfg.dropoffAt);
-  const sameOffice=normalize(cfg.pickup)===normalize(cfg.dropoff);
-  const okPick=await selectOffice(selects.nth(0),cfg.pickup);
-  let okDrop=false;if(sameOffice)okDrop=await selectByPredicate(selects.nth(1),o=>/misma oficina|same office|meme agence|gleiche/i.test(o.text));
-  if(!okDrop)okDrop=await selectOffice(selects.nth(1),cfg.dropoff);
-  const steps=[
-    selectDay(selects.nth(2),pick),selectMonth(selects.nth(3),pick),selectTime(selects.nth(4),pick),
-    selectDay(selects.nth(5),drop),selectMonth(selects.nth(6),drop),selectTime(selects.nth(7),drop)
-  ];
-  const values=await Promise.all(steps);if(!okPick||!okDrop||values.some(v=>!v))return false;
-  const form=selects.nth(0).locator('xpath=ancestor::form[1]');
-  const scopedSubmit=form.locator('input[type="submit"],button[type="submit"]').last();
-  if(await scopedSubmit.isVisible().catch(()=>false)){await scopedSubmit.click();return true;}
-  return clickFirst(page,[page.getByRole('button',{name:/buscar|consultar|ver precios|new search|search|presupuest/i}).first(),page.locator('input[type="submit"],button[type="submit"]').last()]);
-}
-async function fillModernForm(page,cfg){
-  const pick=dateParts(cfg.pickupAt),drop=dateParts(cfg.dropoffAt);
-  await fillFirst(page,[page.getByLabel(/recogida|pickup/i).first(),'input[name*="pickup" i]'],cfg.pickup);
-  await fillFirst(page,[page.getByLabel(/devolución|devolucion|drop.?off|return/i).first(),'input[name*="drop" i],input[name*="return" i]'],cfg.dropoff);
-  const dateInputs=page.locator('input[type="date"]');if(await dateInputs.count()>=2){await dateInputs.nth(0).fill(pick.date).catch(()=>{});await dateInputs.nth(1).fill(drop.date).catch(()=>{});}
-  await fillFirst(page,['input[name*="pickupDate" i],input[id*="pickupDate" i]'],pick.date);
-  await fillFirst(page,['input[name*="returnDate" i],input[id*="returnDate" i],input[name*="dropoffDate" i]'],drop.date);
-  const timeInputs=page.locator('input[type="time"]');if(await timeInputs.count()>=2){await timeInputs.nth(0).fill(`${pick.hour}:${pick.minute}`).catch(()=>{});await timeInputs.nth(1).fill(`${drop.hour}:${drop.minute}`).catch(()=>{});}
-  return clickFirst(page,[page.getByRole('button',{name:/buscar|consultar|ver precios|continuar|new quote/i}).first(),page.locator('button[type="submit"],input[type="submit"]').first()]);
-}
-async function safeText(page){return page.locator('body').innerText({timeout:12000}).catch(()=> '');}
-async function openCandidate(page,url){
-  await page.goto(url,{waitUntil:'commit',timeout:45000});
-  await page.waitForLoadState('domcontentloaded',{timeout:18000}).catch(()=>{});await page.waitForTimeout(2200);
-  const text=await safeText(page);return {text,challenge:/please wait|request is being verified|verifying|comprobando su navegador|un momento/i.test(text)};
-}
-const MODEL_STOPWORDS=new Set(['o','or','oder','ou','similar','similaire','similarer','similaren','similarmente','tsi','reference']);
-function modelTokens(value=''){
-  return normalize(value).split(' ').filter(token=>token.length>1&&!MODEL_STOPWORDS.has(token));
-}
+function modelTokens(value=''){return normalize(value).split(' ').filter(token=>token.length>1&&!MODEL_STOPWORDS.has(token));}
 function targetIndex(lines,config){
   const tokens=modelTokens(config.model);
   if(tokens.length){
@@ -72,42 +45,85 @@ function targetIndex(lines,config){
     return candidates.length?candidates[0].index:-1;
   }
   const group=String(config.group||'').trim().replace(/[^a-z0-9]/gi,'');
-  if(group){const re=new RegExp(`^${group}\\s*[-–—:]`,'i');const i=lines.findIndex(x=>re.test(x.trim()));if(i>=0)return i;}
+  if(group){const re=new RegExp(`^${group}\s*[-–—:]`,'i');const i=lines.findIndex(x=>re.test(x.trim()));if(i>=0)return i;}
   return -1;
 }
-function groupVehicleLines(lines,group){
-  const value=String(group||'').trim().replace(/[^a-z0-9]/gi,'');if(!value)return [];
-  const re=new RegExp(`^${value}\\s*[-–—:]`,'i');return lines.filter(line=>re.test(line.trim())).slice(0,6);
-}
+function groupVehicleLines(lines,group){const value=String(group||'').trim().replace(/[^a-z0-9]/gi,'');if(!value)return [];const re=new RegExp(`^${value}\\s*[-–—:]`,'i');return lines.filter(line=>re.test(line.trim())).slice(0,8);}
 function extractTotal(lines,index){
-  if(index<0)return 0;const block=lines.slice(index,index+14).join(' ');const prices=money(block).filter(v=>v>0);if(!prices.length)return 0;
+  if(index<0)return 0;const block=lines.slice(index,index+16).join(' ');
   const euroTotals=[...block.matchAll(/([0-9]{1,4}(?:[.,][0-9]{2}))\s*€\s*(?:Reservar|Reserve|Reserver|Reservieren)/gi)].map(m=>Number(m[1].replace(',','.'))).filter(Number.isFinite);
-  return euroTotals[0]||Math.max(...prices);
+  if(euroTotals.length)return euroTotals[0];
+  const prices=money(block).filter(v=>v>0&&v<5000);return prices.length?Math.max(...prices):0;
+}
+function dateAppears(text,part){
+  const n=normalize(text),day=String(Number(part.day)),year=part.year,tokens=MONTH_TOKENS[part.month]||[];
+  return n.includes(year)&&tokens.some(token=>new RegExp(`\\b${day}\\s*[- /]?\\s*${token}`,'i').test(n)||new RegExp(`\\b${day}\\s+${token}`,'i').test(n));
+}
+function resultsLookValid(text,config){const pick=dateParts(config.pickupAt),drop=dateParts(config.dropoffAt);return /mostrando precios|prices for|tarifas|precios para|recogida|pick up/i.test(text)&&dateAppears(text,pick)&&dateAppears(text,drop);}
+async function safeText(page){return page.locator('body').innerText({timeout:12000}).catch(()=> '');}
+async function openCandidate(page,url){
+  await page.goto(url,{waitUntil:'commit',timeout:45000});await page.waitForLoadState('domcontentloaded',{timeout:18000}).catch(()=>{});await page.waitForTimeout(2200);
+  const text=await safeText(page);return {text,challenge:/please wait|request is being verified|verifying|comprobando su navegador|un momento/i.test(text)};
+}
+async function selectByPredicate(select,predicate){const options=await select.locator('option').evaluateAll(nodes=>nodes.map(o=>({value:o.value,text:(o.textContent||'').trim()}))).catch(()=>[]);const match=options.find(predicate);if(!match)return false;await select.selectOption(match.value);return true;}
+async function selectOffice(select,label){const wanted=normalize(label),words=wanted.split(' ').filter(x=>x.length>2);return selectByPredicate(select,o=>{const text=normalize(o.text);return words.length?words.every(w=>text.includes(w)):text.includes(wanted);});}
+async function selectDay(select,part){return selectByPredicate(select,o=>String(o.text).trim().replace(/^0/,'')===String(Number(part.day))||String(o.value).replace(/^0/,'')===String(Number(part.day)));}
+async function selectMonth(select,part){const tokens=MONTH_TOKENS[part.month]||[];return selectByPredicate(select,o=>{const text=normalize(`${o.text} ${o.value}`).replace(/\s+/g,'');return (text.includes(part.year)&&tokens.some(t=>text.includes(t)))||String(o.value)===`${part.month}-${part.year}`;});}
+async function selectTime(select,part){const wanted=`${part.hour}:${part.minute}`;const exact=await selectByPredicate(select,o=>String(o.text).trim()===wanted||String(o.value).trim()===wanted);if(exact)return true;return selectByPredicate(select,o=>String(o.text).trim().startsWith(`${part.hour}:`)||String(o.value).trim().startsWith(`${part.hour}:`));}
+async function firstExisting(root,selectors){for(const selector of selectors){const loc=root.locator(selector).first();if(await loc.count().catch(()=>0))return loc;}return null;}
+async function fillNamedLegacyForm(page,cfg){
+  const pick=dateParts(cfg.pickupAt),drop=dateParts(cfg.dropoffAt);
+  let form=page.locator('form').filter({has:page.locator('select[name="ofi_rec"]')}).first();
+  if(!await form.count().catch(()=>0))form=page.locator('form').filter({hasText:/oficina de recogida|pick.?up office/i}).last();
+  if(!await form.count().catch(()=>0))return false;
+  const rec=await firstExisting(form,['select[name="ofi_rec"]','select[name*="ofi_rec" i]']);const dev=await firstExisting(form,['select[name="ofi_dev"]','select[name*="ofi_dev" i]']);
+  const d1=await firstExisting(form,['select[name="dia_inicio"]','select[name*="dia_inicio" i]']);const m1=await firstExisting(form,['select[name="mes_inicio"]','select[name*="mes_inicio" i]']);const h1=await firstExisting(form,['select[name="hora_inicio"]','select[name*="hora_inicio" i]','select[name*="hora" i]']);
+  const d2=await firstExisting(form,['select[name="dia_final"]','select[name*="dia_final" i]']);const m2=await firstExisting(form,['select[name="mes_final"]','select[name*="mes_final" i]']);
+  let timeSelects=form.locator('select').filter({has:page.locator('option')});
+  const allSelects=form.locator('select');
+  const h2=await firstExisting(form,['select[name="hora_final"]','select[name*="hora_final" i]']);
+  if(!rec||!dev||!d1||!m1||!d2||!m2)return false;
+  const same=normalize(cfg.pickup)===normalize(cfg.dropoff);const okRec=await selectOffice(rec,cfg.pickup);let okDev=false;
+  if(same)okDev=await selectByPredicate(dev,o=>/misma oficina|same office|meme agence|gleiche/i.test(o.text));if(!okDev)okDev=await selectOffice(dev,cfg.dropoff);
+  const ok=[okRec,okDev,await selectDay(d1,pick),await selectMonth(m1,pick),await selectDay(d2,drop),await selectMonth(m2,drop)];
+  if(h1)ok.push(await selectTime(h1,pick));if(h2)ok.push(await selectTime(h2,drop));
+  // Fallback for hour selects when their names are not descriptive: use select positions 4 and 7 in the search form.
+  if(!h1&&await allSelects.count()>=5)ok.push(await selectTime(allSelects.nth(4),pick));if(!h2&&await allSelects.count()>=8)ok.push(await selectTime(allSelects.nth(7),drop));
+  if(ok.some(v=>!v))return false;
+  const submit=form.locator('input[type="submit"],button[type="submit"]').last();if(await submit.isVisible().catch(()=>false)){await Promise.all([page.waitForLoadState('domcontentloaded',{timeout:35000}).catch(()=>{}),submit.click()]);return true;}
+  return false;
+}
+async function fillPositionalLegacyForm(page,cfg){
+  const selects=page.locator('select:visible');const count=await selects.count();if(count<8)return false;const pick=dateParts(cfg.pickupAt),drop=dateParts(cfg.dropoffAt),same=normalize(cfg.pickup)===normalize(cfg.dropoff);
+  const okPick=await selectOffice(selects.nth(0),cfg.pickup);let okDrop=false;if(same)okDrop=await selectByPredicate(selects.nth(1),o=>/misma oficina|same office|meme agence|gleiche/i.test(o.text));if(!okDrop)okDrop=await selectOffice(selects.nth(1),cfg.dropoff);
+  const values=await Promise.all([selectDay(selects.nth(2),pick),selectMonth(selects.nth(3),pick),selectTime(selects.nth(4),pick),selectDay(selects.nth(5),drop),selectMonth(selects.nth(6),drop),selectTime(selects.nth(7),drop)]);
+  if(!okPick||!okDrop||values.some(v=>!v))return false;const form=selects.nth(0).locator('xpath=ancestor::form[1]');const submit=form.locator('input[type="submit"],button[type="submit"]').last();if(await submit.isVisible().catch(()=>false)){await submit.click();return true;}return clickFirst(page,[page.getByRole('button',{name:/buscar|consultar|ver precios|new search|search|presupuest/i}).first()]);
+}
+async function fillModernForm(page,cfg){
+  const pick=dateParts(cfg.pickupAt),drop=dateParts(cfg.dropoffAt);await fillFirst(page,[page.getByLabel(/recogida|pickup/i).first(),'input[name*="pickup" i]'],cfg.pickup);await fillFirst(page,[page.getByLabel(/devolución|devolucion|drop.?off|return/i).first(),'input[name*="drop" i],input[name*="return" i]'],cfg.dropoff);
+  const dates=page.locator('input[type="date"]');if(await dates.count()>=2){await dates.nth(0).fill(pick.date).catch(()=>{});await dates.nth(1).fill(drop.date).catch(()=>{});}const times=page.locator('input[type="time"]');if(await times.count()>=2){await times.nth(0).fill(`${pick.hour}:${pick.minute}`).catch(()=>{});await times.nth(1).fill(`${drop.hour}:${drop.minute}`).catch(()=>{});}return clickFirst(page,[page.getByRole('button',{name:/buscar|consultar|ver precios|continuar|new quote/i}).first(),page.locator('button[type="submit"],input[type="submit"]').first()]);
+}
+function parseResult(text,config){const lines=text.split(/\n+/).map(x=>x.trim()).filter(Boolean),index=targetIndex(lines,config),total=extractTotal(lines,index);return {lines,index,total,found:groupVehicleLines(lines,config.group)};}
+function diagnosticSummary(page,text,parsed,config){
+  const heading=text.split(/\n+/).map(x=>x.trim()).filter(Boolean).filter(x=>/mostrando precios|prices for|recogida|pick up|nueva b.squeda|new search/i.test(x)).slice(0,4).join(' | ');
+  const found=parsed.found.length?` Vehículos grupo ${config.group}: ${parsed.found.join(' | ')}`:'';return `URL final: ${page.url()}.${heading?` Página: ${heading}.`:''}${found}`;
 }
 export async function monitorAutoReisen(browser,config){
   const context=await browser.newContext({locale:'es-ES',timezoneId:'Atlantic/Canary',viewport:{width:1440,height:1100},userAgent:'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140 Safari/537.36'});const page=await context.newPage();
   try{
-    const configured=process.env.AUTOREISEN_SEARCH_URL||config.searchUrl;const candidates=[resultsEntryUrl(configured),configured].filter((v,i,a)=>v&&a.indexOf(v)===i);
-    let opened=false,lastChallenge=false;
-    for(const url of candidates){
-      try{const result=await openCandidate(page,url);lastChallenge=result.challenge;if(!result.challenge){opened=true;break;}}catch(error){console.warn('[autoreisen] No se pudo abrir',url,error.message);}
-    }
-    if(!opened){throw new Error(lastChallenge?'AutoReisen está mostrando una verificación anti-bot al ejecutor de GitHub. Se intentará de nuevo en la siguiente comprobación.':'No se pudo abrir AutoReisen desde GitHub Actions.');}
-    await acceptCookies(page);
-    const intro=page.getByText(/^\s*Continuar\s*$/i).first();if(await intro.isVisible().catch(()=>false))await intro.click().catch(()=>{});
-    const legacyFilled=await fillLegacySelectForm(page,config).catch(()=>false);if(!legacyFilled)await fillModernForm(page,config).catch(()=>false);
-    if(legacyFilled){await page.waitForLoadState('domcontentloaded',{timeout:35000}).catch(()=>{});await page.waitForTimeout(3500);}else{await page.waitForTimeout(6500);}
-    let text=await safeText(page);
-    if(/please wait|request is being verified|verifying|comprobando su navegador|un momento/i.test(text))throw new Error('AutoReisen activó la verificación anti-bot durante la consulta.');
-    await snapshot(page,'autoreisen-resultados');
-    const lines=text.split(/\n+/).map(x=>x.trim()).filter(Boolean);const index=targetIndex(lines,config);const total=extractTotal(lines,index);
-    if(index<0||!total){
-      const found=groupVehicleLines(lines,config.group);const suffix=found.length?` Vehículos del grupo ${config.group} encontrados: ${found.join(' | ')}`:'';
-      throw new Error(`No se encontró el precio de ${config.model||`grupo ${config.group}`}.${suffix||' El formulario se abrió, pero AutoReisen no devolvió ese vehículo para las fechas configuradas.'}`);
-    }
-    const relevant=lines.slice(index,index+14).join(' '),days=daysBetween(config.pickupAt,config.dropoffAt);
-    return {source:'AutoReisen · tarifas/flota · GitHub Actions + Playwright',checkedAt:isoNow(),price:total,total,pricePerDay:total/days,availability:/no disponible|agotado|sold out|not available/i.test(relevant)?'No disponible':'Disponible',group:config.group,model:config.model,pickupAt:config.pickupAt,dropoffAt:config.dropoffAt};
+    // Strategy 1: use AutoReisen's public results query directly. This avoids fragile visual form selectors.
+    const direct=directResultUrl(config);let opened=await openCandidate(page,direct).catch(()=>({text:'',challenge:false}));if(opened.challenge)opened={text:'',challenge:true};await acceptCookies(page);let text=opened.text||await safeText(page);let parsed=parseResult(text,config);
+    if(parsed.index>=0&&parsed.total&&resultsLookValid(text,config)){await snapshot(page,'autoreisen-resultados');const relevant=parsed.lines.slice(parsed.index,parsed.index+16).join(' '),days=daysBetween(config.pickupAt,config.dropoffAt);return {source:'AutoReisen · consulta directa · GitHub Actions + Playwright',checkedAt:isoNow(),price:parsed.total,total:parsed.total,pricePerDay:parsed.total/days,availability:/no disponible|agotado|sold out|not available/i.test(relevant)?'No disponible':'Disponible',group:config.group,model:config.model,pickupAt:config.pickupAt,dropoffAt:config.dropoffAt};}
+
+    // Strategy 2: fill the actual named legacy fields, not the first selects in the document.
+    const base=resultsEntryUrl(process.env.AUTOREISEN_SEARCH_URL||config.searchUrl);await openCandidate(page,base).catch(()=>{});await acceptCookies(page);const intro=page.getByText(/^\s*Continuar\s*$/i).first();if(await intro.isVisible().catch(()=>false))await intro.click().catch(()=>{});
+    let submitted=await fillNamedLegacyForm(page,config).catch(()=>false);if(!submitted)submitted=await fillPositionalLegacyForm(page,config).catch(()=>false);if(!submitted)submitted=await fillModernForm(page,config).catch(()=>false);if(submitted){await page.waitForLoadState('domcontentloaded',{timeout:35000}).catch(()=>{});await page.waitForTimeout(4000);}text=await safeText(page);
+    if(/please wait|request is being verified|verifying|comprobando su navegador|un momento/i.test(text))throw new Error('AutoReisen activó la verificación anti-bot durante la consulta.');parsed=parseResult(text,config);await snapshot(page,'autoreisen-resultados');
+    if(parsed.index>=0&&parsed.total){const relevant=parsed.lines.slice(parsed.index,parsed.index+16).join(' '),days=daysBetween(config.pickupAt,config.dropoffAt);return {source:'AutoReisen · formulario identificado · GitHub Actions + Playwright',checkedAt:isoNow(),price:parsed.total,total:parsed.total,pricePerDay:parsed.total/days,availability:/no disponible|agotado|sold out|not available/i.test(relevant)?'No disponible':'Disponible',group:config.group,model:config.model,pickupAt:config.pickupAt,dropoffAt:config.dropoffAt};}
+    const diag=diagnosticSummary(page,text,parsed,config);
+    if(parsed.found.length)throw new Error(`AutoReisen devolvió resultados, pero no apareció ${config.model||`el grupo ${config.group}`}. ${diag}`);
+    throw new Error(`AutoReisen no llegó a una lista de vehículos válida para las fechas configuradas. ${diag}`);
   }finally{await context.close();}
 }
 
-export const __autoreisenTest={resultsEntryUrl,targetIndex,extractTotal,normalize,modelTokens,groupVehicleLines};
+export const __autoreisenTest={resultsEntryUrl,directResultUrl,officeId,targetIndex,extractTotal,normalize,modelTokens,groupVehicleLines,resultsLookValid,dateParts};
