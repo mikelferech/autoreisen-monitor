@@ -16,7 +16,7 @@
     "preferredReturnFlight": "VY3271"
   },
   "autoreisen": {
-    "enabled": false,
+    "enabled": true,
     "searchUrl": "https://www.autoreisen.com/alquiler-coches/alquiler-de-coches.php",
     "pickup": "Gran Canaria - Aeropuerto",
     "dropoff": "Gran Canaria - Aeropuerto",
@@ -24,6 +24,15 @@
     "dropoffAt": "2026-09-21T15:00",
     "group": "E",
     "model": "Seat Arona o similar",
-    "reservedPrice": 137.03
+    "reservedPrice": 137.03,
+    "intervalHours": 24,
+    "telegramEnabled": true,
+    "telegramNotifyPriceDrop": true,
+    "telegramNotifyBelowReserved": true,
+    "telegramNotifyAvailability": true,
+    "telegramNotifyError": true,
+    "telegramNotifyRecovery": true,
+    "telegramMinDropAmount": 0,
+    "telegramMinDropPercent": 0
   }
 }
