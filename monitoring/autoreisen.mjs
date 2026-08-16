@@ -1,4 +1,4 @@
-// MFE_AUTOREISEN_AUTOMATION_VERSION: 2.1.54
+// MFE_AUTOREISEN_AUTOMATION_VERSION: 2.1.55
 import {acceptCookies,clickFirst,daysBetween,fillFirst,isoNow,money,snapshot} from './lib.mjs';
 
 const MONTH_TOKENS={
