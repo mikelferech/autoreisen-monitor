@@ -1,4 +1,4 @@
-// MFE_AUTOREISEN_AUTOMATION_VERSION: 2.1.53
+// MFE_AUTOREISEN_AUTOMATION_VERSION: 2.1.54
 import {acceptCookies,clickFirst,daysBetween,fillFirst,isoNow,money,snapshot} from './lib.mjs';
 
 const MONTH_TOKENS={
@@ -34,7 +34,9 @@ function directResultUrl(config){
   const rec=officeId(config.pickup),dev=officeId(config.dropoff);
   if(rec)url.searchParams.set('ofi_rec',rec);if(dev)url.searchParams.set('ofi_dev',dev);
   url.searchParams.set('dia_inicio',String(Number(pick.day)));url.searchParams.set('mes_inicio',`${pick.month}-${pick.year}`);
-  url.searchParams.set('dia_final',String(Number(drop.day)));url.searchParams.set('mes_final',`${drop.month}-${drop.year}`);url.searchParams.set('fin','1');
+  url.searchParams.set('hora_inicio',`${pick.hour}:${pick.minute}`);
+  url.searchParams.set('dia_final',String(Number(drop.day)));url.searchParams.set('mes_final',`${drop.month}-${drop.year}`);
+  url.searchParams.set('hora_final',`${drop.hour}:${drop.minute}`);url.searchParams.set('fin','1');
   return url.toString();
 }
 function modelTokens(value=''){return normalize(value).split(' ').filter(token=>token.length>1&&!MODEL_STOPWORDS.has(token));}
@@ -59,7 +61,15 @@ function dateAppears(text,part){
   const n=normalize(text),day=String(Number(part.day)),year=part.year,tokens=MONTH_TOKENS[part.month]||[];
   return n.includes(year)&&tokens.some(token=>new RegExp(`\\b${day}\\s*[- /]?\\s*${token}`,'i').test(n)||new RegExp(`\\b${day}\\s+${token}`,'i').test(n));
 }
-function resultsLookValid(text,config){const pick=dateParts(config.pickupAt),drop=dateParts(config.dropoffAt);return /mostrando precios|prices for|tarifas|precios para|recogida|pick up/i.test(text)&&dateAppears(text,pick)&&dateAppears(text,drop);}
+function expectedRentalDays(config){return Math.max(1,Math.ceil((new Date(config.dropoffAt)-new Date(config.pickupAt))/86400000));}
+function rentalDurationAppears(text,config){
+  const days=expectedRentalDays(config),n=normalize(text);
+  return new RegExp(`\\b${days}\\s*(?:dias?|days?|jours?|tage?n?)\\b`,'i').test(n);
+}
+function resultsLookValid(text,config){
+  const pick=dateParts(config.pickupAt),drop=dateParts(config.dropoffAt);
+  return /mostrando precios|prices for|tarifas|precios para|recogida|pick up/i.test(text)&&dateAppears(text,pick)&&dateAppears(text,drop)&&rentalDurationAppears(text,config);
+}
 async function safeText(page){return page.locator('body').innerText({timeout:12000}).catch(()=> '');}
 async function openCandidate(page,url){
   await page.goto(url,{waitUntil:'commit',timeout:45000});await page.waitForLoadState('domcontentloaded',{timeout:18000}).catch(()=>{});await page.waitForTimeout(2200);
@@ -119,11 +129,12 @@ export async function monitorAutoReisen(browser,config){
     const base=resultsEntryUrl(process.env.AUTOREISEN_SEARCH_URL||config.searchUrl);await openCandidate(page,base).catch(()=>{});await acceptCookies(page);const intro=page.getByText(/^\s*Continuar\s*$/i).first();if(await intro.isVisible().catch(()=>false))await intro.click().catch(()=>{});
     let submitted=await fillNamedLegacyForm(page,config).catch(()=>false);if(!submitted)submitted=await fillPositionalLegacyForm(page,config).catch(()=>false);if(!submitted)submitted=await fillModernForm(page,config).catch(()=>false);if(submitted){await page.waitForLoadState('domcontentloaded',{timeout:35000}).catch(()=>{});await page.waitForTimeout(4000);}text=await safeText(page);
     if(/please wait|request is being verified|verifying|comprobando su navegador|un momento/i.test(text))throw new Error('AutoReisen activó la verificación anti-bot durante la consulta.');parsed=parseResult(text,config);await snapshot(page,'autoreisen-resultados');
-    if(parsed.index>=0&&parsed.total){const relevant=parsed.lines.slice(parsed.index,parsed.index+16).join(' '),days=daysBetween(config.pickupAt,config.dropoffAt);return {source:'AutoReisen · formulario identificado · GitHub Actions + Playwright',checkedAt:isoNow(),price:parsed.total,total:parsed.total,pricePerDay:parsed.total/days,availability:/no disponible|agotado|sold out|not available/i.test(relevant)?'No disponible':'Disponible',group:config.group,model:config.model,pickupAt:config.pickupAt,dropoffAt:config.dropoffAt};}
+    if(parsed.index>=0&&parsed.total&&resultsLookValid(text,config)){const relevant=parsed.lines.slice(parsed.index,parsed.index+16).join(' '),days=daysBetween(config.pickupAt,config.dropoffAt);return {source:'AutoReisen · formulario identificado · GitHub Actions + Playwright',checkedAt:isoNow(),price:parsed.total,total:parsed.total,pricePerDay:parsed.total/days,availability:/no disponible|agotado|sold out|not available/i.test(relevant)?'No disponible':'Disponible',group:config.group,model:config.model,pickupAt:config.pickupAt,dropoffAt:config.dropoffAt};}
     const diag=diagnosticSummary(page,text,parsed,config);
+    if(parsed.index>=0&&parsed.total&&!rentalDurationAppears(text,config))throw new Error(`AutoReisen devolvió un precio para una duración distinta. MFE Viajes espera ${expectedRentalDays(config)} días (${dateParts(config.pickupAt).hour}:${dateParts(config.pickupAt).minute} → ${dateParts(config.dropoffAt).hour}:${dateParts(config.dropoffAt).minute}). ${diag}`);
     if(parsed.found.length)throw new Error(`AutoReisen devolvió resultados, pero no apareció ${config.model||`el grupo ${config.group}`}. ${diag}`);
     throw new Error(`AutoReisen no llegó a una lista de vehículos válida para las fechas configuradas. ${diag}`);
   }finally{await context.close();}
 }
 
-export const __autoreisenTest={resultsEntryUrl,directResultUrl,officeId,targetIndex,extractTotal,normalize,modelTokens,groupVehicleLines,resultsLookValid,dateParts};
+export const __autoreisenTest={resultsEntryUrl,directResultUrl,officeId,targetIndex,extractTotal,normalize,modelTokens,groupVehicleLines,resultsLookValid,dateParts,expectedRentalDays,rentalDurationAppears};
