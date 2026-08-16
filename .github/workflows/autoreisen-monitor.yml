@@ -2,7 +2,9 @@ name: AutoReisen · MFE Viajes
 
 on:
   schedule:
-    - cron: '17 * * * *'
+    # 07:30 Europe/Madrid todo el año: 05:30 UTC en horario de verano y 06:30 UTC en invierno.
+    - cron: '30 5 * * *'
+    - cron: '30 6 * * *'
   workflow_dispatch:
     inputs:
       force:
@@ -37,6 +39,7 @@ jobs:
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID || secrets.TELEGRAM_CHAT || secrets.CHAT_ID }}
       MFE_FORCE_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.force || false }}
       MFE_TEST_TELEGRAM: ${{ github.event_name == 'workflow_dispatch' && inputs.telegram_test || false }}
+      MFE_SCHEDULE_EVENT: ${{ github.event.schedule }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
