@@ -1,10 +1,10 @@
 import fs from 'node:fs/promises';
 import {chromium} from 'playwright';
-import {hoursSince,isoNow,moneyText,postResult,readLatest,sendTelegram} from './lib.mjs';
+import {daysBetween,hoursSince,isoNow,moneyText,postResult,readLatest,sendTelegram} from './lib.mjs';
 import {monitorAutoReisen} from './autoreisen.mjs';
 
 const document=JSON.parse(await fs.readFile(new URL('./config.json',import.meta.url),'utf8'));
-const config={enabled:true,intervalHours:24,telegramEnabled:true,telegramNotifyPriceDrop:true,telegramNotifyBelowReserved:true,telegramNotifyAvailability:true,telegramNotifyError:true,telegramNotifyRecovery:true,telegramMinDropAmount:0,telegramMinDropPercent:0,...(document.autoreisen||{})};
+const config={enabled:true,intervalHours:24,telegramEnabled:true,telegramNotifyEveryCheck:true,telegramNotifyPriceDrop:true,telegramNotifyBelowReserved:true,telegramNotifyAvailability:true,telegramNotifyError:true,telegramNotifyRecovery:true,telegramMinDropAmount:0,telegramMinDropPercent:0,...(document.autoreisen||{})};
 const force=/^(1|true|yes)$/i.test(String(process.env.MFE_FORCE_RUN||''));
 const telegramTest=/^(1|true|yes)$/i.test(String(process.env.MFE_TEST_TELEGRAM||''));
 
@@ -26,15 +26,32 @@ const browser=await chromium.launch({headless:true});
 try{
   const result=await monitorAutoReisen(browser,config);
   const notices=[];const current=Number(result.total||result.price)||0;const prior=Number(previous.result?.total||previous.result?.price)||0;const reserved=Number(config.reservedPrice)||0;
+  const hadPreviousError=Boolean(previous.lastError);
   const dropAmount=prior>current?prior-current:0,dropPercent=prior>0?dropAmount/prior*100:0,minDropAmount=Math.max(0,Number(config.telegramMinDropAmount)||0),minDropPercent=Math.max(0,Number(config.telegramMinDropPercent)||0);
   const dropMeetsLimits=dropAmount>0&&(minDropAmount<=0||dropAmount>=minDropAmount)&&(minDropPercent<=0||dropPercent>=minDropPercent);
   if(config.telegramNotifyPriceDrop&&prior>0&&current>0&&current<prior&&dropMeetsLimits)notices.push(`📉 Baja de precio: ${moneyText(prior)} → ${moneyText(current)} (-${moneyText(dropAmount)}, -${dropPercent.toFixed(1)}%)`);
   if(config.telegramNotifyBelowReserved&&reserved>0&&current>0&&current<reserved&&(prior<=0||prior>=reserved))notices.push(`✅ Por debajo de tu reserva: ${moneyText(current)} (reservado ${moneyText(reserved)})`);
   if(config.telegramNotifyAvailability&&previous.result?.availability&&result.availability!==previous.result.availability)notices.push(`🚗 Disponibilidad: ${previous.result.availability} → ${result.availability}`);
-  if(config.telegramNotifyRecovery&&previous.lastError)notices.push(`🟢 Monitor recuperado tras el error anterior.`);
+  if(config.telegramNotifyRecovery&&hadPreviousError)notices.push(`🟢 Monitor recuperado tras el error anterior.`);
   await postResult('autoreisen',{...result,ok:true,status:'ok',checkedAt:result.checkedAt||isoNow()});
-  if(config.telegramEnabled&&notices.length){
-    try{await sendTelegram(`🚗 MFE Viajes · AutoReisen\n${notices.join('\n')}\nPrecio actual: ${moneyText(current)}\n${config.model||config.group||''}`);}catch(error){console.error('Telegram:',error.message);}
+  if(config.telegramEnabled&&(config.telegramNotifyEveryCheck||notices.length)){
+    const difference=reserved>0?current-reserved:0;
+    const trend=prior<=0?'ℹ️ Primera comprobación correcta.':current<prior?`📉 Precio ${moneyText(prior-current)} más bajo que en la comprobación anterior.`:current>prior?`📈 Precio ${moneyText(current-prior)} más alto que en la comprobación anterior.`:'➖ Sin cambio respecto a la comprobación anterior.';
+    const formatPoint=value=>{const [date,time='']=String(value||'').split('T');const [year,month,day]=date.split('-');return year&&month&&day?`${day}/${month} ${time.slice(0,5)}`:String(value||'');};
+    const days=daysBetween(config.pickupAt,config.dropoffAt);
+    const differenceText=reserved>0?`${difference>=0?'+':''}${moneyText(difference)}`:'—';
+    const lines=[
+      '🚗 MFE Viajes · AutoReisen',
+      ...(notices.length?notices:['✅ Comprobación correcta']),
+      `Precio actual: ${moneyText(current)}`,
+      `Reserva: ${reserved>0?moneyText(reserved):'—'}`,
+      `Diferencia vs reserva: ${differenceText}`,
+      trend,
+      `${config.model||'Vehículo'}${config.group?` · Grupo ${config.group}`:''}`,
+      `${days} ${days===1?'día':'días'} · ${formatPoint(config.pickupAt)} → ${formatPoint(config.dropoffAt)}`,
+      `Disponibilidad: ${result.availability||'Disponible'}`
+    ];
+    try{await sendTelegram(lines.join('\n'));}catch(error){console.error('Telegram:',error.message);}
   }
   console.log('[autoreisen] OK',result);
 }catch(error){
