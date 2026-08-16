@@ -37,6 +37,9 @@
     "telegramNotifyEveryCheck": true,
     "scheduleMode": "daily",
     "scheduleTime": "07:30",
-    "scheduleTimeZone": "Europe/Madrid"
+    "scheduleTimeZone": "Europe/Madrid",
+    "pickupOfficeId": "18",
+    "dropoffOfficeId": "18",
+    "carId": "119"
   }
 }
