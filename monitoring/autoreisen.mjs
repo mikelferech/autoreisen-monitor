@@ -1,4 +1,4 @@
-// MFE_AUTOREISEN_AUTOMATION_VERSION: 2.1.51
+// MFE_AUTOREISEN_AUTOMATION_VERSION: 2.1.52
 import {acceptCookies,clickFirst,daysBetween,fillFirst,isoNow,money,snapshot} from './lib.mjs';
 
 const MONTH_TOKENS={
@@ -61,10 +61,23 @@ async function openCandidate(page,url){
   await page.waitForLoadState('domcontentloaded',{timeout:18000}).catch(()=>{});await page.waitForTimeout(2200);
   const text=await safeText(page);return {text,challenge:/please wait|request is being verified|verifying|comprobando su navegador|un momento/i.test(text)};
 }
+const MODEL_STOPWORDS=new Set(['o','or','oder','ou','similar','similaire','similarer','similaren','similarmente','tsi','reference']);
+function modelTokens(value=''){
+  return normalize(value).split(' ').filter(token=>token.length>1&&!MODEL_STOPWORDS.has(token));
+}
 function targetIndex(lines,config){
-  const model=normalize(config.model);if(model){const i=lines.findIndex(x=>normalize(x).includes(model));if(i>=0)return i;}
-  const group=String(config.group||'').trim().replace(/[^a-z0-9]/gi,'');if(group){const re=new RegExp(`^${group}\\s*[-–—:]`,'i');const i=lines.findIndex(x=>re.test(x.trim()));if(i>=0)return i;}
+  const tokens=modelTokens(config.model);
+  if(tokens.length){
+    const candidates=lines.map((line,index)=>({index,text:normalize(line)})).filter(item=>tokens.every(token=>item.text.includes(token)));
+    return candidates.length?candidates[0].index:-1;
+  }
+  const group=String(config.group||'').trim().replace(/[^a-z0-9]/gi,'');
+  if(group){const re=new RegExp(`^${group}\\s*[-–—:]`,'i');const i=lines.findIndex(x=>re.test(x.trim()));if(i>=0)return i;}
   return -1;
+}
+function groupVehicleLines(lines,group){
+  const value=String(group||'').trim().replace(/[^a-z0-9]/gi,'');if(!value)return [];
+  const re=new RegExp(`^${value}\\s*[-–—:]`,'i');return lines.filter(line=>re.test(line.trim())).slice(0,6);
 }
 function extractTotal(lines,index){
   if(index<0)return 0;const block=lines.slice(index,index+14).join(' ');const prices=money(block).filter(v=>v>0);if(!prices.length)return 0;
@@ -88,10 +101,13 @@ export async function monitorAutoReisen(browser,config){
     if(/please wait|request is being verified|verifying|comprobando su navegador|un momento/i.test(text))throw new Error('AutoReisen activó la verificación anti-bot durante la consulta.');
     await snapshot(page,'autoreisen-resultados');
     const lines=text.split(/\n+/).map(x=>x.trim()).filter(Boolean);const index=targetIndex(lines,config);const total=extractTotal(lines,index);
-    if(index<0||!total)throw new Error(`No se encontró el precio de ${config.model||`grupo ${config.group}`}. El formulario se abrió, pero AutoReisen no devolvió ese vehículo para las fechas configuradas.`);
+    if(index<0||!total){
+      const found=groupVehicleLines(lines,config.group);const suffix=found.length?` Vehículos del grupo ${config.group} encontrados: ${found.join(' | ')}`:'';
+      throw new Error(`No se encontró el precio de ${config.model||`grupo ${config.group}`}.${suffix||' El formulario se abrió, pero AutoReisen no devolvió ese vehículo para las fechas configuradas.'}`);
+    }
     const relevant=lines.slice(index,index+14).join(' '),days=daysBetween(config.pickupAt,config.dropoffAt);
     return {source:'AutoReisen · tarifas/flota · GitHub Actions + Playwright',checkedAt:isoNow(),price:total,total,pricePerDay:total/days,availability:/no disponible|agotado|sold out|not available/i.test(relevant)?'No disponible':'Disponible',group:config.group,model:config.model,pickupAt:config.pickupAt,dropoffAt:config.dropoffAt};
   }finally{await context.close();}
 }
 
-export const __autoreisenTest={resultsEntryUrl,targetIndex,extractTotal,normalize};
+export const __autoreisenTest={resultsEntryUrl,targetIndex,extractTotal,normalize,modelTokens,groupVehicleLines};
