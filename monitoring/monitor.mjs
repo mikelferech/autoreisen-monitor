@@ -1,18 +1,34 @@
 import fs from 'node:fs/promises';
 import {chromium} from 'playwright';
 import {daysBetween,isoNow,moneyText,postResult,readLatest,sendTelegram} from './lib.mjs';
-import {monitorAutoReisen} from './autoreisen.mjs';
+import {monitorAutoReisen,scanAutoReisenFleet} from './autoreisen.mjs';
 
 const document=JSON.parse(await fs.readFile(new URL('./config.json',import.meta.url),'utf8'));
 const config={enabled:true,telegramEnabled:true,telegramNotifyEveryCheck:true,telegramNotifyPriceDrop:true,telegramNotifyBelowReserved:true,telegramNotifyAvailability:true,telegramNotifyError:true,telegramNotifyRecovery:true,telegramMinDropAmount:0,telegramMinDropPercent:0,...(document.autoreisen||{})};
 const force=/^(1|true|yes)$/i.test(String(process.env.MFE_FORCE_RUN||''));
 const telegramTest=/^(1|true|yes)$/i.test(String(process.env.MFE_TEST_TELEGRAM||''));
+const fleetOnly=/^(1|true|yes)$/i.test(String(process.env.MFE_FLEET_ONLY||''));
+const requestId=String(process.env.MFE_REQUEST_ID||'').trim();
 
 if(telegramTest){
   if(!config.telegramEnabled)throw new Error('Telegram está desactivado en MFE Viajes. Actívalo antes de probarlo.');
   await sendTelegram(`🧪 MFE Viajes · Telegram funciona correctamente\nAutoReisen · ${new Date().toLocaleString('es-ES',{timeZone:'Atlantic/Canary'})}`);
   console.log('Mensaje de prueba enviado a Telegram.');
   process.exit(0);
+}
+if(fleetOnly){
+  const browser=await chromium.launch({headless:true});
+  try{
+    const result=await scanAutoReisenFleet(browser,config);
+    await postResult('autoreisen',{...result,ok:true,status:'ok',scanMode:'fleet',requestId,checkedAt:result.checkedAt||isoNow()});
+    console.log('[autoreisen-fleet] OK',result);
+  }catch(error){
+    const result={ok:false,status:'error',scanMode:'fleet',requestId,error:error?.message||String(error),checkedAt:isoNow(),source:'GitHub Actions + Playwright'};
+    console.error('[autoreisen-fleet] ERROR',error);
+    try{await postResult('autoreisen',result);}catch(postError){console.error('No se pudo registrar el error de flota en el Worker:',postError.message);}
+    process.exitCode=1;
+  }finally{await browser.close();}
+  process.exit(process.exitCode||0);
 }
 if(!config.enabled){console.log('Monitor AutoReisen desactivado desde MFE Viajes.');process.exit(0);}
 
