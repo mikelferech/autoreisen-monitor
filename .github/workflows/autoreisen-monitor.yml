@@ -17,6 +17,16 @@ on:
         required: false
         default: false
         type: boolean
+      fleet_only:
+        description: 'Consultar únicamente la flota disponible para las fechas configuradas'
+        required: false
+        default: false
+        type: boolean
+      request_id:
+        description: 'Identificador de la consulta puntual de flota'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -39,6 +49,8 @@ jobs:
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID || secrets.TELEGRAM_CHAT || secrets.CHAT_ID }}
       MFE_FORCE_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.force || false }}
       MFE_TEST_TELEGRAM: ${{ github.event_name == 'workflow_dispatch' && inputs.telegram_test || false }}
+      MFE_FLEET_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.fleet_only || false }}
+      MFE_REQUEST_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.request_id || '' }}
       MFE_SCHEDULE_EVENT: ${{ github.event.schedule }}
     steps:
       - uses: actions/checkout@v4
