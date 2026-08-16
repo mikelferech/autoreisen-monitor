@@ -34,6 +34,9 @@
     "telegramNotifyRecovery": true,
     "telegramMinDropAmount": 0,
     "telegramMinDropPercent": 0,
-    "telegramNotifyEveryCheck": true
+    "telegramNotifyEveryCheck": true,
+    "scheduleMode": "daily",
+    "scheduleTime": "07:30",
+    "scheduleTimeZone": "Europe/Madrid"
   }
 }
