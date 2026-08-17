@@ -18,8 +18,8 @@
   "autoreisen": {
     "enabled": true,
     "searchUrl": "https://www.autoreisen.com/alquiler-coches/alquiler-de-coches.php",
-    "pickup": "Fuerteventura - Aeropuerto",
-    "dropoff": "Fuerteventura - Aeropuerto",
+    "pickup": "Gran Canaria - Aeropuerto",
+    "dropoff": "Gran Canaria - Aeropuerto",
     "pickupAt": "2026-09-14T09:00",
     "dropoffAt": "2026-09-21T15:00",
     "group": "E",
@@ -38,8 +38,8 @@
     "scheduleMode": "daily",
     "scheduleTime": "07:30",
     "scheduleTimeZone": "Europe/Madrid",
-    "pickupOfficeId": "19",
-    "dropoffOfficeId": "19",
+    "pickupOfficeId": "18",
+    "dropoffOfficeId": "18",
     "carId": "119"
   }
 }
