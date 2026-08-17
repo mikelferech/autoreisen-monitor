@@ -2,9 +2,9 @@ name: AutoReisen · MFE Viajes
 
 on:
   schedule:
-    # 07:30 Europe/Madrid todo el año: 05:30 UTC en horario de verano y 06:30 UTC en invierno.
-    - cron: '30 5 * * *'
-    - cron: '30 6 * * *'
+    # Una sola ejecución diaria a las 07:30 de Madrid. GitHub gestiona automáticamente CET/CEST.
+    - cron: '30 7 * * *'
+      timezone: "Europe/Madrid"
   workflow_dispatch:
     inputs:
       force:
@@ -18,12 +18,17 @@ on:
         default: false
         type: boolean
       fleet_only:
-        description: 'Consultar únicamente la flota disponible para las fechas configuradas'
+        description: 'Consultar únicamente la flota disponible para una búsqueda puntual'
         required: false
         default: false
         type: boolean
       request_id:
         description: 'Identificador de la consulta puntual de flota'
+        required: false
+        default: ''
+        type: string
+      fleet_config_json:
+        description: 'Configuración temporal de la consulta puntual; no modifica la reserva del monitor diario'
         required: false
         default: ''
         type: string
@@ -51,7 +56,7 @@ jobs:
       MFE_TEST_TELEGRAM: ${{ github.event_name == 'workflow_dispatch' && inputs.telegram_test || false }}
       MFE_FLEET_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.fleet_only || false }}
       MFE_REQUEST_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.request_id || '' }}
-      MFE_SCHEDULE_EVENT: ${{ github.event.schedule }}
+      MFE_FLEET_CONFIG_JSON: ${{ github.event_name == 'workflow_dispatch' && inputs.fleet_config_json || '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
