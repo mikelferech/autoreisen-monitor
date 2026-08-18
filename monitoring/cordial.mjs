@@ -1,4 +1,4 @@
-// MFE_CORDIAL_AUTOMATION_VERSION: 2.1.93
+// MFE_CORDIAL_AUTOMATION_VERSION: 2.1.94
 import {isoNow,snapshot,acceptCookies} from './lib.mjs';
 
 const normalize=value=>String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/\s+/g,' ').trim();
@@ -24,7 +24,7 @@ async function optionDiagnostics(page,pattern){
     const text=String(await el.innerText().catch(()=>'' )).replace(/\s+/g,' ').trim();
     if(!text||!pattern.test(text))continue;
     const attrs=await el.evaluate(node=>{
-      const out={};for(const name of ['role','value','data-id','data-value','data-code','data-hotel-code','data-destination-id','data-type','id','class']){const v=node.getAttribute?.(name);if(v)out[name]=v;}return out;
+      const out={};for(const name of ['role','value','data-id','data-value','data-code','data-hotel-code','data-destination-id','destination_id','hotel_code','hotel_codes','data-type','id','class']){const v=node.getAttribute?.(name);if(v)out[name]=v;}return out;
     }).catch(()=>({}));
     rows.push({text,attrs,visible:await visible(el)});
     if(rows.length>=12)break;
@@ -67,7 +67,7 @@ async function selectAutocompleteValue(page,input,text,pattern){
 async function deriveHiddenFromRenderedOption(page,pattern,kind){
   const info=await optionDiagnostics(page,pattern);
   const preferred=kind==='destination'
-    ?['data-destination-id','data-id','data-value','value','data-code']
+    ?['destination_id','data-destination-id','data-id','data-value','value','data-code']
     :['data-hotel-code','data-code','data-value','value','data-id'];
   for(const row of info){
     for(const key of preferred){
@@ -89,7 +89,28 @@ async function chooseHotel(page,config){
   // Por eso seleccionamos primero el destino y después el hotel usando el mismo autocomplete
   // que utiliza un usuario real, y verificamos los hidden antes de lanzar la búsqueda.
   let destinationSelected=false,hotelSelected=false;
-  if(await visible(visual)){
+
+  // v2.1.94: el diagnóstico real de BeCordial mostró que el selector ya deja en el DOM
+  // nodos ocultos seleccionados con destination_id (p. ej. el destino y el hotel), aunque
+  // el input hidden destination_id siga vacío. Recuperamos ese identificador del propio DOM
+  // antes de intentar manipular visualmente el autocomplete. No se hardcodea ningún ID.
+  let prefilledDestination=String(await destination.inputValue().catch(()=>'' )).trim();
+  if(!prefilledDestination){
+    const fromHotel=await deriveHiddenFromRenderedOption(page,/Cordial Santa Águeda.*Perchel Beach Club/i,'destination');
+    const fromDestination=fromHotel.value?{value:'',source:'',rows:[]}:await deriveHiddenFromRenderedOption(page,/^Gran Canaria\s*-\s*Sur(?:\s*\(España\))?$/i,'destination');
+    const derived=fromHotel.value?fromHotel:fromDestination;
+    if(derived.value){
+      await forceControlValue(destination,derived.value).catch(()=>false);
+      prefilledDestination=String(await destination.inputValue().catch(()=>'' )).trim();
+      if(prefilledDestination){
+        destinationSelected=true;
+        if(fromHotel.value)hotelSelected=true;
+        console.log(`[cordial] destination_id recuperado del modelo interno del selector: ${prefilledDestination} (${derived.source}).`);
+      }
+    }
+  }
+
+  if(await visible(visual)&&!prefilledDestination){
     destinationSelected=await selectAutocompleteValue(page,visual,'Gran Canaria - Sur',/^Gran Canaria\s*-\s*Sur$/i);
     await page.waitForTimeout(350);
     let destinationValue=String(await destination.inputValue().catch(()=>'' )).trim();
