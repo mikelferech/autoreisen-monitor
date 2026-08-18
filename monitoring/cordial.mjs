@@ -1,8 +1,50 @@
-// MFE_CORDIAL_AUTOMATION_VERSION: 2.1.97
+// MFE_CORDIAL_AUTOMATION_VERSION: 2.1.98
 import {isoNow,snapshot,acceptCookies} from './lib.mjs';
 
 const normalize=value=>String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/\s+/g,' ').trim();
 const visible=loc=>loc.isVisible().catch(()=>false);
+async function acceptCordialCookies(page){
+  // BeCordial carga su gestor de cookies dentro de un iframe (/cookies/manager).
+  // El helper genérico solo ve botones del documento principal; si no cerramos
+  // este iframe, la capa .cookiepanel-container-wrap bloquea el autocomplete,
+  // el botón Buscar y cualquier selección real del hotel.
+  await acceptCookies(page).catch(()=>{});
+  const frameLocator=page.frameLocator('#cookie_panel_iframe, iframe[src*="/cookies/manager"]').first();
+  const framePresent=await page.locator('#cookie_panel_iframe, iframe[src*="/cookies/manager"]').count().catch(()=>0);
+  let clicked=false;
+  if(framePresent){
+    for(const label of [/^aceptar$/i,/aceptar todas/i,/accept all/i,/^accept$/i,/consentir/i]){
+      const btn=frameLocator.getByRole('button',{name:label}).first();
+      if(await btn.isVisible().catch(()=>false)){
+        clicked=await btn.click({timeout:5000}).then(()=>true).catch(()=>false);
+        if(clicked)break;
+      }
+    }
+    // Respaldo por texto para el caso de que el iframe no exponga role=button.
+    if(!clicked){
+      for(const label of [/^aceptar$/i,/aceptar todas/i]){
+        const btn=frameLocator.getByText(label,{exact:true}).first();
+        if(await btn.isVisible().catch(()=>false)){
+          clicked=await btn.click({timeout:5000}).then(()=>true).catch(()=>false);
+          if(clicked)break;
+        }
+      }
+    }
+  }
+  if(clicked){
+    await page.waitForTimeout(450);
+    await page.locator('.cookiepanel-container-wrap,.popup-cookiepanel-wrapper').first()
+      .waitFor({state:'hidden',timeout:5000}).catch(()=>{});
+  }
+  const overlayVisible=await page.locator('.cookiepanel-container-wrap,.popup-cookiepanel-wrapper').first()
+    .isVisible().catch(()=>false);
+  if(framePresent||overlayVisible){
+    console.log(`[cordial] Cookies: iframe=${framePresent?'sí':'no'} · acción=${clicked?'aceptar':'no detectada'} · overlay=${overlayVisible?'visible':'cerrado'}.`);
+  }else{
+    console.log('[cordial] Cookies: sin panel bloqueante.');
+  }
+  return !overlayVisible;
+}
 const eur=text=>{
   const raw=String(text||'').replace(/\u00a0/g,' ');
   const rows=[];
@@ -72,7 +114,7 @@ async function selectHotelThroughUi(page,wanted){
   if(!await visible(visual))return false;
   const wantedPattern=/Cordial Santa Águeda.*Perchel Beach Club/i;
   try{
-    // v2.1.97: antes de tocar hidden inputs intentamos reproducir la selección humana real.
+    // v2.1.98: antes de tocar hidden inputs intentamos reproducir la selección humana real.
     // El JS de BeCordial mantiene estado interno asociado al autocomplete y, si únicamente
     // escribimos hotel_codes/destination_id, puede vaciar hotel_codes justo al pulsar Buscar.
     await visual.click({force:true});
@@ -489,7 +531,7 @@ async function submitSearch(page){
     if(initialState.invalid?.length)console.log(`[cordial] Validación HTML: ${JSON.stringify(initialState.invalid)}`);
   }
 
-  // v2.1.97: el JS de BeCordial vacía hotel_codes justo al enviar. Interceptamos únicamente
+  // v2.1.98: el JS de BeCordial vacía hotel_codes justo al enviar. Interceptamos únicamente
   // el POST real y reponemos los dos campos críticos, manteniendo cookies, CSRF y listeners.
   const removeGuard=await installCriticalPostGuard(page,critical);
   try{
@@ -576,7 +618,7 @@ export async function monitorCordial(browser,config={}){
   const context=await browser.newContext({locale:'es-ES',timezoneId:'Atlantic/Canary',viewport:{width:1440,height:1300},userAgent:'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140 Safari/537.36'});const page=await context.newPage();
   try{
     const url=String(config.searchUrl||'https://www.becordial.com/gran-canaria-sur/cordial-santa-agueda/').trim();
-    await page.goto(url,{waitUntil:'domcontentloaded',timeout:45000});await page.waitForTimeout(1800);await acceptCookies(page);
+    await page.goto(url,{waitUntil:'domcontentloaded',timeout:45000});await page.waitForTimeout(1800);const cookiesReady=await acceptCordialCookies(page);if(!cookiesReady){await snapshot(page,'cordial-cookies-bloqueando').catch(()=>{});throw new Error('El panel de cookies de BeCordial sigue bloqueando el formulario y no se pudo cerrar automáticamente.');}
     if(!/\/booking\/process\/room/i.test(page.url())){
       const hotelOk=await chooseHotel(page,config).catch(()=>false);
       if(!hotelOk){const d=await diagnostic(page);throw new Error(`No se pudo inicializar por completo el destino/hotel de Cordial antes de buscar. ${d}`);}
