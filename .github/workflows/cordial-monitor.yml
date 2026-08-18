@@ -16,13 +16,14 @@ concurrency:
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: monitoring
     env:
       MFE_WORKER_URL: ${{ secrets.MFE_WORKER_URL }}
       MFE_MONITOR_SECRET: ${{ secrets.MFE_MONITOR_SECRET }}
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -30,9 +31,26 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: monitoring/package-lock.json
-      - run: npm ci
-      - run: npx playwright install --with-deps chromium
-      - run: node cordial-run.mjs
+      - name: Instalar dependencias Node
+        run: npm ci
+      - name: Comprobar Chrome preinstalado
+        shell: bash
+        run: |
+          set -e
+          if command -v google-chrome >/dev/null 2>&1; then
+            google-chrome --version
+          elif command -v google-chrome-stable >/dev/null 2>&1; then
+            google-chrome-stable --version
+          elif command -v chromium >/dev/null 2>&1; then
+            chromium --version
+          elif command -v chromium-browser >/dev/null 2>&1; then
+            chromium-browser --version
+          else
+            echo "::error::El runner no tiene Chrome/Chromium preinstalado."
+            exit 1
+          fi
+      - name: Ejecutar monitor Cordial
+        run: node cordial-run.mjs
       - name: Guardar diagnóstico si falla
         if: failure()
         uses: actions/upload-artifact@v4
