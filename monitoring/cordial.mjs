@@ -1,4 +1,4 @@
-// MFE_CORDIAL_AUTOMATION_VERSION: 2.2.00
+// MFE_CORDIAL_AUTOMATION_VERSION: 2.2.01
 import {isoNow,snapshot,acceptCookies} from './lib.mjs';
 
 const normalize=value=>String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/\s+/g,' ').trim();
@@ -181,6 +181,46 @@ async function deriveHiddenFromRenderedOption(page,pattern,kind){
   }
   return {value:'',source:'',rows:info};
 }
+async function selectHotelFromNativePopup(page,wanted='Cordial Santa Águeda & Perchel Beach Club',wantedCode='AGUEDA'){
+  // El diagnóstico real de BeCordial muestra que el selector NO es un autocomplete clásico:
+  // #where_popup contiene <li class="hotel" data-hotel="AGUEDA">. Pulsar ese elemento es
+  // la forma más fiel de reproducir la selección humana y permite que el JS propio del motor
+  // rellene hotel_codes/destination_id y cualquier estado interno asociado.
+  const form=page.locator('#booking_process_form').first();
+  const code=form.locator('input[name="hotel_codes"]').first();
+  const destination=form.locator('input[name="destination_id"]').first();
+  const visual=form.locator('#id_search_text,input.search_text,input[placeholder*="destino" i],input[placeholder*="hotel" i]').first();
+  const opener=form.locator('.input-like.where').first();
+  const popup=form.locator('#where_popup').first();
+  const destinationOption=popup.locator('li.destination[data-destination="220"]').first();
+  const hotelOption=popup.locator(`li.hotel[data-hotel="${wantedCode}"]`).first();
+  if(!await form.count().catch(()=>0)||!await hotelOption.count().catch(()=>0))return false;
+  try{
+    if(await opener.count().catch(()=>0))await opener.click({timeout:3500}).catch(async()=>{await visual.click({force:true,timeout:2500}).catch(()=>{});});
+    await page.waitForTimeout(220);
+    // Si el destino no está ya marcado, lo seleccionamos desde el mismo popup nativo.
+    if(await destinationOption.count().catch(()=>0)){
+      const selected=await destinationOption.evaluate(el=>el.classList.contains('li_selected')).catch(()=>false);
+      if(!selected){
+        await destinationOption.click({timeout:3000}).catch(async()=>destinationOption.click({force:true,timeout:3000}).catch(()=>{}));
+        await page.waitForTimeout(220);
+      }
+    }
+    const clicked=await hotelOption.click({timeout:3500}).then(()=>true).catch(async()=>hotelOption.click({force:true,timeout:3500}).then(()=>true).catch(()=>false));
+    if(!clicked)return false;
+    await page.waitForTimeout(550);
+    const hotelCode=String(await code.inputValue().catch(()=>'' )).trim();
+    const destinationId=String(await destination.inputValue().catch(()=>'' )).trim();
+    const visualValue=String(await visual.inputValue().catch(()=>'' )).trim();
+    console.log(`[cordial] Selector nativo de hotel: visual=${visualValue||'—'} · destination_id=${destinationId||'—'} · hotel_codes=${hotelCode||'—'}`);
+    if(hotelCode===wantedCode&&destinationId){
+      await form.evaluate((f,data)=>{f.setAttribute('data-mfe-hotel-code',data.hotelCode);f.setAttribute('data-mfe-destination-id',data.destinationId);},{hotelCode,destinationId}).catch(()=>{});
+      return true;
+    }
+  }catch(error){console.log(`[cordial] Selector nativo de hotel no pudo completarse: ${error?.message||String(error)}`);}
+  return false;
+}
+
 async function chooseHotel(page,config){
   const wanted=config.hotel||'Cordial Santa Águeda & Perchel Beach Club';
   const code=page.locator('input[name="hotel_codes"]').first();
@@ -188,7 +228,16 @@ async function chooseHotel(page,config){
   const visual=page.locator('input[placeholder*="destino" i],input[placeholder*="hotel" i]').first();
   const before={code:await code.inputValue().catch(()=>''),destination:await destination.inputValue().catch(()=>'' )};
 
-  // Primero intentamos una selección real mediante el autocomplete, porque ese clic ejecuta
+  // Primera opción: usar el selector nativo real que descubrimos en el HTML de diagnóstico.
+  const selectedNative=await selectHotelFromNativePopup(page,wanted,'AGUEDA').catch(()=>false);
+  if(selectedNative){
+    const currentCode=String(await code.inputValue().catch(()=>'' )).trim();
+    const currentDestination=String(await destination.inputValue().catch(()=>'' )).trim();
+    console.log(`[cordial] Hotel preparado con selector nativo: code=${currentCode||'—'} · destination_id=${currentDestination||'—'}`);
+    return Boolean(currentCode&&currentDestination);
+  }
+
+  // Segundo intento: selección real mediante el autocomplete/entrada visual, porque ese clic ejecuta
   // los listeners internos de BeCordial y prepara más estado que los hidden por sí solos.
   const selectedThroughUi=await selectHotelThroughUi(page,wanted).catch(()=>false);
   if(selectedThroughUi){
@@ -418,9 +467,14 @@ async function bookingResultReady(page){
   for(let i=0;i<Math.min(count,30);i++){if(await visible(reserveButtons.nth(i)))visibleReserve++;}
   if(visibleReserve>=2){
     const body=await page.locator('body').innerText().catch(()=> '');
-    const hasBookingContent=/€|SOLO ALOJAMIENTO|DESAYUNO|Classic|Duplex|Deluxe|Ocean|Tarifa/i.test(body);
-    if(hasBookingContent){
-      console.log(`[cordial] Resultados detectados en /booking/process/ por ${visibleReserve} botones Reservar visibles.`);
+    const hotelListSignature=['Cordial Green Golf','Cordial Sandy Golf','Cordial Mogán Valle','Cordial Mogán Playa'].filter(name=>body.includes(name)).length>=2;
+    const hasRoomContent=/SOLO ALOJAMIENTO|DESAYUNO|Classic|Duplex|Dúplex|Deluxe|Ocean|Tarifa Club Cordial|Tarifa Estándar/i.test(body);
+    if(hotelListSignature){
+      console.log(`[cordial] Resultados intermedios detectados: lista de hoteles (${visibleReserve} botones Reservar).`);
+      return true;
+    }
+    if(hasRoomContent){
+      console.log(`[cordial] Resultados de habitaciones detectados en /booking/process/ por ${visibleReserve} botones Reservar visibles.`);
       return true;
     }
   }
@@ -598,6 +652,78 @@ async function submitSearch(page){
     return false;
   }finally{await removeGuard();}
 }
+async function visibleReserveCount(page){
+  const reserves=page.getByRole('button',{name:/^reservar$/i});
+  const count=Math.min(await reserves.count().catch(()=>0),60);let visibleCount=0;
+  for(let i=0;i<count;i++)if(await visible(reserves.nth(i)))visibleCount++;
+  return visibleCount;
+}
+async function roomRatesReady(page,config={}){
+  const wantedRoom=String(config.targetRoom||'Classic Duplex').trim();
+  const body=await page.locator('body').innerText().catch(()=> '');
+  if(wantedRoom&&new RegExp(wantedRoom.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'i').test(body))return true;
+  if(/Tarifa Club Cordial|Tarifa Est[aá]ndar|Club Cordial\s*-\s*(?:Oferta Prepago Online|Reserva Online)|SOLO ALOJAMIENTO/i.test(body))return true;
+  return /\/booking\/process\/room/i.test(page.url())&&await visibleReserveCount(page)>0;
+}
+async function destinationHotelListReady(page){
+  const cards=page.locator('.hotel_list .hotel,.hotels_list .hotel,.hotel-list .hotel');
+  let visibleCards=0;const count=Math.min(await cards.count().catch(()=>0),40);
+  for(let i=0;i<count;i++)if(await visible(cards.nth(i)))visibleCards++;
+  if(visibleCards>=2)return true;
+  const body=await page.locator('body').innerText().catch(()=> '');
+  const signatures=['Cordial Green Golf','Cordial Sandy Golf','Cordial Mogán Valle','Cordial Mogán Playa'];
+  return signatures.filter(name=>body.includes(name)).length>=2&&await visibleReserveCount(page)>=2;
+}
+async function clickTargetHotelFromResults(page,config={}){
+  if(!await destinationHotelListReady(page))return false;
+  const wanted=String(config.hotel||'Cordial Santa Águeda & Perchel Beach Club').trim();
+  const wantedPattern=/Cordial Santa Águeda.*Perchel Beach Club/i;
+  const directCards=[
+    page.locator('.hotel_list .hotel').filter({hasText:wantedPattern}),
+    page.locator('.hotels_list .hotel').filter({hasText:wantedPattern}),
+    page.locator('.hotel-list .hotel').filter({hasText:wantedPattern})
+  ];
+  for(const group of directCards){
+    const count=Math.min(await group.count().catch(()=>0),8);
+    for(let i=0;i<count;i++){
+      const card=group.nth(i);if(!await visible(card))continue;
+      const btn=card.getByRole('button',{name:/^reservar$/i}).first();
+      if(!await visible(btn))continue;
+      console.log(`[cordial] Resultado intermedio: seleccionando hotel «${wanted}» desde la lista de hoteles.`);
+      const clicked=await btn.click({timeout:5000}).then(()=>true).catch(async()=>btn.click({force:true,timeout:5000}).then(()=>true).catch(()=>false));
+      if(!clicked)continue;
+      const started=Date.now();while(Date.now()-started<30000){if(await roomRatesReady(page,config))return true;await page.waitForTimeout(350);}
+    }
+  }
+  // Respaldo: localizamos qué botón Reservar pertenece a un ancestro cuyo texto contiene el hotel.
+  const reserves=page.getByRole('button',{name:/^reservar$/i});
+  const count=Math.min(await reserves.count().catch(()=>0),50);
+  for(let i=0;i<count;i++){
+    const btn=reserves.nth(i);if(!await visible(btn))continue;
+    const belongs=await btn.evaluate((el,name)=>{
+      const norm=v=>String(v||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+      const target=norm(name);let node=el.parentElement;
+      for(let depth=0;node&&depth<7;depth++,node=node.parentElement){
+        const text=norm(node.innerText||'');if(text.includes(target))return true;
+        if(text.length>8000)break;
+      }return false;
+    },wanted).catch(()=>false);
+    if(!belongs)continue;
+    console.log(`[cordial] Resultado intermedio: hotel objetivo localizado por contexto; pulsando Reservar.`);
+    const clicked=await btn.click({timeout:5000}).then(()=>true).catch(async()=>btn.click({force:true,timeout:5000}).then(()=>true).catch(()=>false));
+    if(!clicked)continue;
+    const started=Date.now();while(Date.now()-started<30000){if(await roomRatesReady(page,config))return true;await page.waitForTimeout(350);}
+  }
+  await snapshot(page,'cordial-lista-hoteles-sin-seleccionar').catch(()=>{});
+  console.log(`[cordial] Se obtuvo una lista de hoteles, pero no se pudo abrir «${wanted}».`);
+  return false;
+}
+async function ensureRoomResults(page,config={}){
+  if(await roomRatesReady(page,config))return true;
+  if(await destinationHotelListReady(page))return await clickTargetHotelFromResults(page,config);
+  return false;
+}
+
 async function selectClubTab(page){
   const tabs=page.getByText(/Tarifa Club Cordial/i);
   const count=await tabs.count().catch(()=>0);
@@ -745,7 +871,11 @@ export async function monitorCordial(browser,config={}){
       if(!datesOk){const d=await diagnostic(page);throw new Error(`No se localizaron de forma fiable los campos de fechas del formulario público de Cordial. ${d}`);}
       const submitted=await submitSearch(page);if(!submitted){const d=await diagnostic(page);throw new Error(`No se pudo enviar el formulario de reserva de Cordial. ${d}`);}
     }
-    await page.waitForTimeout(2500);await selectClubTab(page).catch(()=>false);await page.waitForTimeout(650);
+    await page.waitForTimeout(900);
+    const roomReady=await ensureRoomResults(page,config).catch(()=>false);
+    if(!roomReady){await snapshot(page,'cordial-sin-llegar-habitaciones').catch(()=>{});const d=await diagnostic(page);throw new Error(`Cordial respondió a la búsqueda, pero no se pudo llegar a las habitaciones del hotel objetivo. ${d}`);}
+    console.log('[cordial] Hotel objetivo abierto: pantalla de habitaciones/tarifas disponible.');
+    await page.waitForTimeout(900);await selectClubTab(page).catch(()=>false);await page.waitForTimeout(650);
     // Guardamos la pantalla REAL de resultados antes de interpretar nada. Si el lector vuelve
     // a fallar, el artefacto contendrá por fin el DOM de las tarifas y no solo el buscador.
     await snapshot(page,'cordial-resultados-bruto').catch(()=>{});
@@ -763,4 +893,4 @@ export async function monitorCordial(browser,config={}){
   }finally{await context.close();}
 }
 
-export const __cordialTest={parseCordialText,parseReserveContext,targetMatches,normalize,fillDateInputs,forceControlValue,syncVisibleDateRange,submitSearch,formState,stabilizeBookingControls,bookingResultReady};
+export const __cordialTest={parseCordialText,parseReserveContext,targetMatches,normalize,fillDateInputs,forceControlValue,syncVisibleDateRange,submitSearch,formState,stabilizeBookingControls,bookingResultReady,roomRatesReady,destinationHotelListReady};
