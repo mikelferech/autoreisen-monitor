@@ -1,4 +1,4 @@
-// MFE_CORDIAL_AUTOMATION_VERSION: 2.1.88
+// MFE_CORDIAL_AUTOMATION_VERSION: 2.1.89
 import {isoNow,snapshot,acceptCookies} from './lib.mjs';
 
 const normalize=value=>String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/\s+/g,' ').trim();
@@ -16,6 +16,9 @@ function targetMatches(row,config){
   return (!room||normalize(row.roomType).includes(room))&&(!rate||normalize(row.rateName).includes(rate))&&(!board||normalize(row.board).includes(board));
 }
 async function chooseHotel(page,config){
+  const existingCode=page.locator('input[name="hotel_codes"]').first();
+  const currentCode=await existingCode.inputValue().catch(()=> '');
+  if(String(currentCode||'').trim())return true;
   const wanted=config.hotel||'Cordial Santa Águeda & Perchel Beach Club';
   const candidates=[
     page.locator('input[placeholder*="destino" i],input[placeholder*="hotel" i]').first(),
@@ -29,18 +32,49 @@ async function chooseHotel(page,config){
   const hotelOption=page.getByText(/Cordial Santa Águeda.*Perchel Beach Club/i).last();if(await visible(hotelOption)){await hotelOption.click().catch(()=>{});return true;}
   return false;
 }
+async function forceControlValue(loc,value){
+  if(!loc||await loc.count().catch(()=>0)<1)return false;
+  try{
+    await loc.first().evaluate((el,v)=>{
+      const proto=el instanceof HTMLInputElement?HTMLInputElement.prototype:el instanceof HTMLSelectElement?HTMLSelectElement.prototype:null;
+      const setter=proto?Object.getOwnPropertyDescriptor(proto,'value')?.set:null;
+      if(setter)setter.call(el,v);else el.value=v;
+      el.dispatchEvent(new Event('input',{bubbles:true}));
+      el.dispatchEvent(new Event('change',{bubbles:true}));
+    },String(value));
+    return String(await loc.first().inputValue().catch(()=>''))===String(value);
+  }catch{return false;}
+}
 async function fillDateInputs(page,config){
   const checkIn=String(config.checkIn||''),checkOut=String(config.checkOut||'');
   if(!/^\d{4}-\d{2}-\d{2}$/.test(checkIn)||!/^\d{4}-\d{2}-\d{2}$/.test(checkOut))throw new Error('Las fechas de Cordial no son válidas.');
+
+  // El formulario público de BeCordial usa actualmente date_from/date_to como campos ocultos.
+  // Debemos escribirlos aunque no sean visibles: el formulario los envía al motor de reservas.
+  const exactIn=page.locator('input[name="date_from"],input#date_from');
+  const exactOut=page.locator('input[name="date_to"],input#date_to');
+  const hasExactIn=await exactIn.count().catch(()=>0)>0,hasExactOut=await exactOut.count().catch(()=>0)>0;
+  if(hasExactIn&&hasExactOut){
+    const okIn=await forceControlValue(exactIn,checkIn),okOut=await forceControlValue(exactOut,checkOut);
+    if(okIn&&okOut){
+      console.log(`[cordial] Fechas aplicadas al formulario: ${checkIn} → ${checkOut}`);
+      return true;
+    }
+  }
+
   const dateInputs=page.locator('input[type="date"]');
-  if(await dateInputs.count()>=2){await dateInputs.nth(0).fill(checkIn).catch(()=>{});await dateInputs.nth(1).fill(checkOut).catch(()=>{});return true;}
-  const inSelectors=['input[name*="checkin" i]','input[name*="arrival" i]','input[name*="entrada" i]','input[name*="start" i]','input[placeholder*="entrada" i]'];
-  const outSelectors=['input[name*="checkout" i]','input[name*="departure" i]','input[name*="salida" i]','input[name*="end" i]','input[placeholder*="salida" i]'];
-  let did=false;
-  for(const selector of inSelectors){const loc=page.locator(selector).first();if(await visible(loc)){await loc.fill(checkIn).catch(async()=>{await loc.evaluate((el,v)=>{el.value=v;el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));},checkIn).catch(()=>{});});did=true;break;}}
-  for(const selector of outSelectors){const loc=page.locator(selector).first();if(await visible(loc)){await loc.fill(checkOut).catch(async()=>{await loc.evaluate((el,v)=>{el.value=v;el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));},checkOut).catch(()=>{});});did=true;break;}}
-  if(did)return true;
-  // El formulario público actual muestra un único campo visual bajo “Entrada / Salida”.
+  if(await dateInputs.count()>=2){
+    const okIn=await forceControlValue(dateInputs.nth(0),checkIn),okOut=await forceControlValue(dateInputs.nth(1),checkOut);
+    if(okIn&&okOut)return true;
+  }
+  const inSelectors=['input[name="date_from"]','input[name*="checkin" i]','input[name*="arrival" i]','input[name*="entrada" i]','input[name*="start" i]','input[placeholder*="entrada" i]'];
+  const outSelectors=['input[name="date_to"]','input[name*="checkout" i]','input[name*="departure" i]','input[name*="salida" i]','input[name*="end" i]','input[placeholder*="salida" i]'];
+  let inOk=false,outOk=false;
+  for(const selector of inSelectors){const loc=page.locator(selector).first();if(await loc.count().catch(()=>0)&&await forceControlValue(loc,checkIn)){inOk=true;break;}}
+  for(const selector of outSelectors){const loc=page.locator(selector).first();if(await loc.count().catch(()=>0)&&await forceControlValue(loc,checkOut)){outOk=true;break;}}
+  if(inOk&&outOk)return true;
+
+  // Último recurso: campo visual único “Entrada / Salida”.
   const dateLabel=page.getByText(/Entrada\s*\/\s*Salida/i).first();
   if(await visible(dateLabel)){
     const input=dateLabel.locator('xpath=following::input[not(@type="hidden")][1]').first();
@@ -50,16 +84,6 @@ async function fillDateInputs(page,config){
         try{await input.fill(value);await input.dispatchEvent('change').catch(()=>{});return true;}catch{}
         try{await input.evaluate((el,v)=>{el.removeAttribute('readonly');el.value=v;el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));},value);return true;}catch{}
       }
-    }
-  }
-  const all=page.locator('input:not([type="hidden"])');
-  for(let i=0;i<Math.min(await all.count(),30);i++){
-    const input=all.nth(i),ph=normalize(await input.getAttribute('placeholder')||''),name=normalize(await input.getAttribute('name')||'');
-    if(!await visible(input))continue;
-    if(/entrada.*salida|fechas|date range|estancia/.test(`${ph} ${name}`)){
-      const [yi,mi,di]=checkIn.split('-'),[yo,mo,do_]=checkOut.split('-');
-      const values=[`${di}/${mi}/${yi} - ${do_}/${mo}/${yo}`,`${di}/${mi}/${yi} – ${do_}/${mo}/${yo}`];
-      for(const value of values){try{await input.fill(value);return true;}catch{}}
     }
   }
   return false;
@@ -77,7 +101,17 @@ async function setAdults(page,config){
 }
 async function submitSearch(page){
   const candidates=[page.getByRole('button',{name:/^buscar$/i}).last(),page.getByRole('button',{name:/reservar|ver precios|consultar disponibilidad/i}).first(),page.locator('button[type="submit"],input[type="submit"]').last()];
-  for(const button of candidates){if(await visible(button)){await Promise.all([page.waitForLoadState('domcontentloaded',{timeout:35000}).catch(()=>{}),button.click().catch(()=>{})]);await page.waitForTimeout(5000);return true;}}
+  for(const button of candidates){
+    if(!await visible(button))continue;
+    await button.click().catch(()=>{});
+    await Promise.race([
+      page.waitForURL(/\/booking\/process\/room/i,{timeout:45000}).catch(()=>{}),
+      page.getByText(/Tarifa Club Cordial|Tarifa Estándar|Classic Duplex/i).first().waitFor({state:'visible',timeout:45000}).catch(()=>{})
+    ]);
+    await page.waitForLoadState('domcontentloaded',{timeout:15000}).catch(()=>{});
+    await page.waitForTimeout(2500);
+    return true;
+  }
   return false;
 }
 async function selectClubTab(page){
@@ -136,4 +170,4 @@ export async function monitorCordial(browser,config={}){
   }finally{await context.close();}
 }
 
-export const __cordialTest={parseCordialText,targetMatches,normalize};
+export const __cordialTest={parseCordialText,targetMatches,normalize,fillDateInputs,forceControlValue};
