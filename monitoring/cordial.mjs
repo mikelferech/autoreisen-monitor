@@ -1,4 +1,4 @@
-// MFE_CORDIAL_AUTOMATION_VERSION: 2.1.95
+// MFE_CORDIAL_AUTOMATION_VERSION: 2.1.96
 import {isoNow,snapshot,acceptCookies} from './lib.mjs';
 
 const normalize=value=>String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/\s+/g,' ').trim();
@@ -90,7 +90,7 @@ async function chooseHotel(page,config){
   // que utiliza un usuario real, y verificamos los hidden antes de lanzar la búsqueda.
   let destinationSelected=false,hotelSelected=false;
 
-  // v2.1.95: el diagnóstico real de BeCordial mostró que el selector ya deja en el DOM
+  // v2.1.96: el diagnóstico real de BeCordial mostró que el selector ya deja en el DOM
   // nodos ocultos seleccionados con destination_id (p. ej. el destino y el hotel), aunque
   // el input hidden destination_id siga vacío. Recuperamos ese identificador del propio DOM
   // antes de intentar manipular visualmente el autocomplete. No se hardcodea ningún ID.
@@ -294,7 +294,19 @@ async function waitForBookingResult(page,timeout=45000){
   }
   return false;
 }
-async function stabilizeBookingControls(page,form=null){
+async function setControlValueRaw(loc,value){
+  if(!loc||await loc.count().catch(()=>0)<1)return false;
+  try{
+    await loc.first().evaluate((el,v)=>{
+      const proto=el instanceof HTMLInputElement?HTMLInputElement.prototype:el instanceof HTMLSelectElement?HTMLSelectElement.prototype:null;
+      const setter=proto?Object.getOwnPropertyDescriptor(proto,'value')?.set:null;
+      if(setter)setter.call(el,v);else el.value=v;
+    },String(value));
+    return String(await loc.first().inputValue().catch(()=>''))===String(value);
+  }catch{return false;}
+}
+
+async function stabilizeBookingControls(page,form=null,fallback={}){
   const hotel=page.locator('input[name="hotel_codes"]').first();
   const destination=page.locator('input[name="destination_id"]').first();
   const targetForm=form&&await form.count().catch(()=>0)?form:hotel.locator('xpath=ancestor::form[1]');
@@ -303,16 +315,23 @@ async function stabilizeBookingControls(page,form=null){
     hotelCode:f.getAttribute('data-mfe-hotel-code')||'',
     destinationId:f.getAttribute('data-mfe-destination-id')||''
   })).catch(()=>({hotelCode:'',destinationId:''}));
+  const wantedDestination=String(fallback.destinationId||remembered.destinationId||'').trim();
+  const wantedHotel=String(fallback.hotelCode||remembered.hotelCode||'').trim();
   let hotelCode=String(await hotel.inputValue().catch(()=>'' )).trim();
   let destinationId=String(await destination.inputValue().catch(()=>'' )).trim();
   let restored=false;
-  if(!hotelCode&&remembered.hotelCode){
-    restored=await forceControlValue(hotel,remembered.hotelCode).catch(()=>false)||restored;
-    hotelCode=String(await hotel.inputValue().catch(()=>'' )).trim();
-  }
-  if(!destinationId&&remembered.destinationId){
-    restored=await forceControlValue(destination,remembered.destinationId).catch(()=>false)||restored;
+
+  // BeCordial puede reconstruir el formulario tras un submit fallido. En ese caso se
+  // pierden los atributos data-mfe-* y hotel_codes queda vacío. Conservamos además una
+  // copia en memoria (fallback) y restauramos SIN disparar input/change.
+  // Orden importante: primero destino y después hotel.
+  if(!destinationId&&wantedDestination){
+    restored=await setControlValueRaw(destination,wantedDestination).catch(()=>false)||restored;
     destinationId=String(await destination.inputValue().catch(()=>'' )).trim();
+  }
+  if(!hotelCode&&wantedHotel){
+    restored=await setControlValueRaw(hotel,wantedHotel).catch(()=>false)||restored;
+    hotelCode=String(await hotel.inputValue().catch(()=>'' )).trim();
   }
   if(restored)console.log(`[cordial] Controles restaurados antes del envío: destination_id=${destinationId||'—'} · hotel_codes=${hotelCode||'—'}`);
   return {ok:Boolean(hotelCode&&destinationId),hotelCode,destinationId};
@@ -326,12 +345,15 @@ async function formState(page,form){
     return {action:f.action||'',method:(f.method||'get').toUpperCase(),id:f.id||'',valid:f.checkValidity(),invalid,data};
   }).catch(()=>null);
 }
-async function postFormDirect(page,form){
-  const stable=await stabilizeBookingControls(page,form);
+async function postFormDirect(page,form,fallback={}){
+  const stable=await stabilizeBookingControls(page,form,fallback);
   if(!stable.ok){console.log(`[cordial] POST directo cancelado: faltan controles críticos · destination_id=${stable.destinationId||'—'} · hotel_codes=${stable.hotelCode||'—'}`);return false;}
   const state=await formState(page,form);if(!state?.action)return false;
   const params=new URLSearchParams();for(const [key,value] of state.data||[])params.append(key,value);
-  console.log(`[cordial] POST directo de diagnóstico: ${state.action} · valid=${state.valid?'sí':'no'} · destination_id=${(state.data||[]).find(x=>x[0]==='destination_id')?.[1]||'—'} · hotel_codes=${(state.data||[]).find(x=>x[0]==='hotel_codes')?.[1]||'—'}`);
+  // Defensa adicional: forzamos los valores críticos también en el payload.
+  params.set('destination_id',stable.destinationId);
+  params.set('hotel_codes',stable.hotelCode);
+  console.log(`[cordial] POST directo de diagnóstico: ${state.action} · valid=${state.valid?'sí':'no'} · destination_id=${params.get('destination_id')||'—'} · hotel_codes=${params.get('hotel_codes')||'—'}`);
   if(state.invalid?.length)console.log(`[cordial] Controles HTML inválidos: ${JSON.stringify(state.invalid)}`);
   try{
     const response=await page.context().request.post(state.action,{data:params.toString(),headers:{'Content-Type':'application/x-www-form-urlencoded','Referer':page.url()},maxRedirects:0,timeout:30000});
@@ -340,8 +362,6 @@ async function postFormDirect(page,form){
     if(status>=300&&status<400&&location){const next=new URL(location,state.action).href;await page.goto(next,{waitUntil:'domcontentloaded',timeout:45000});return await waitForBookingResult(page,25000);}
     const html=await response.text().catch(()=>'');
     if(/Tarifa Club Cordial|Classic Duplex|booking\/process\/room/i.test(html)){
-      // Si el servidor devolvió los resultados directamente, los cargamos en la página
-      // para reutilizar el mismo parser y no hacer una segunda petición distinta.
       await page.setContent(html,{waitUntil:'domcontentloaded',timeout:30000}).catch(()=>{});
       return true;
     }
@@ -351,11 +371,39 @@ async function postFormDirect(page,form){
   }catch(error){console.log(`[cordial] POST directo falló: ${error?.message||String(error)}`);}
   return false;
 }
+
+async function installCriticalPostGuard(page,critical){
+  const pattern='**/booking/process/**';
+  let logged=false;
+  const handler=async route=>{
+    const request=route.request();
+    if(request.method()!=='POST')return route.continue();
+    const contentType=String(request.headers()['content-type']||'');
+    if(!/application\/x-www-form-urlencoded/i.test(contentType))return route.continue();
+    try{
+      const params=new URLSearchParams(request.postData()||'');
+      const beforeDestination=params.get('destination_id')||'';
+      const beforeHotel=params.get('hotel_codes')||'';
+      if(critical.destinationId)params.set('destination_id',critical.destinationId);
+      if(critical.hotelCode)params.set('hotel_codes',critical.hotelCode);
+      const headers={...request.headers()};delete headers['content-length'];
+      if(!logged&&(beforeDestination!==critical.destinationId||beforeHotel!==critical.hotelCode)){
+        console.log(`[cordial] POST interceptado y corregido antes de salir: destination_id=${beforeDestination||'—'}→${critical.destinationId||'—'} · hotel_codes=${beforeHotel||'—'}→${critical.hotelCode||'—'}`);
+        logged=true;
+      }
+      return route.continue({postData:params.toString(),headers});
+    }catch{return route.continue();}
+  };
+  await page.route(pattern,handler);
+  return async()=>{await page.unroute(pattern,handler).catch(()=>{});};
+}
+
 async function submitSearch(page){
   const bookingInput=page.locator('input[name="hotel_codes"]').first();
   const form=bookingInput.locator('xpath=ancestor::form[1]');
   const initialCritical=await stabilizeBookingControls(page,form);
-  console.log(`[cordial] Controles críticos antes de enviar: destination_id=${initialCritical.destinationId||'—'} · hotel_codes=${initialCritical.hotelCode||'—'}`);
+  const critical={destinationId:initialCritical.destinationId,hotelCode:initialCritical.hotelCode};
+  console.log(`[cordial] Controles críticos antes de enviar: destination_id=${critical.destinationId||'—'} · hotel_codes=${critical.hotelCode||'—'}`);
   if(!initialCritical.ok)return false;
   const initialState=await formState(page,form);
   if(initialState){
@@ -363,52 +411,52 @@ async function submitSearch(page){
     if(initialState.invalid?.length)console.log(`[cordial] Validación HTML: ${JSON.stringify(initialState.invalid)}`);
   }
 
-  // Probamos primero el botón real y observamos explícitamente la respuesta POST.
-  const candidates=[
-    page.getByRole('button',{name:/^buscar$/i}).last(),
-    page.locator('button').filter({hasText:/^\s*Buscar\s*$/i}).last(),
-    page.locator('input[type="submit"][value*="buscar" i]').last(),
-    page.locator('[role="button"]').filter({hasText:/^\s*Buscar\s*$/i}).last(),
-    page.getByRole('button',{name:/reservar|ver precios|consultar disponibilidad/i}).first(),
-    page.locator('button[type="submit"],input[type="submit"]').last()
-  ];
-  for(const button of candidates){
-    if(!await visible(button))continue;
-    const label=(await button.innerText().catch(()=>''))||(await button.getAttribute('value').catch(()=>''))||'botón';
-    console.log(`[cordial] Intentando búsqueda con: ${String(label).trim()||'botón visible'}`);
-    const stable=await stabilizeBookingControls(page,form);
-    if(!stable.ok)continue;
-    await button.scrollIntoViewIfNeeded().catch(()=>{});
-    const responsePromise=page.waitForResponse(r=>/\/booking\/process\/?(?:$|\?)/i.test(r.url())&&r.request().method()==='POST',{timeout:10000}).catch(()=>null);
-    const clicked=await button.click({force:true,timeout:5000}).then(()=>true).catch(()=>false);
-    if(!clicked)continue;
-    const response=await responsePromise;
-    if(response)console.log(`[cordial] POST del botón: HTTP ${response.status()} · ${response.url()}`);
-    if(await waitForBookingResult(page,20000))return true;
-  }
+  // v2.1.96: el JS de BeCordial vacía hotel_codes justo al enviar. Interceptamos únicamente
+  // el POST real y reponemos los dos campos críticos, manteniendo cookies, CSRF y listeners.
+  const removeGuard=await installCriticalPostGuard(page,critical);
+  try{
+    const candidates=[
+      page.getByRole('button',{name:/^buscar$/i}).last(),
+      page.locator('button').filter({hasText:/^\s*Buscar\s*$/i}).last(),
+      page.locator('input[type="submit"][value*="buscar" i]').last(),
+      page.locator('[role="button"]').filter({hasText:/^\s*Buscar\s*$/i}).last(),
+      page.getByRole('button',{name:/reservar|ver precios|consultar disponibilidad/i}).first(),
+      page.locator('button[type="submit"],input[type="submit"]').last()
+    ];
+    for(const button of candidates){
+      if(!await visible(button))continue;
+      const label=(await button.innerText().catch(()=>''))||(await button.getAttribute('value').catch(()=>''))||'botón';
+      console.log(`[cordial] Intentando búsqueda con: ${String(label).trim()||'botón visible'}`);
+      const stable=await stabilizeBookingControls(page,form,critical);
+      if(!stable.ok)continue;
+      await button.scrollIntoViewIfNeeded().catch(()=>{});
+      const responsePromise=page.waitForResponse(r=>/\/booking\/process\/?(?:$|\?)/i.test(r.url())&&r.request().method()==='POST',{timeout:10000}).catch(()=>null);
+      const clicked=await button.click({force:true,timeout:5000}).then(()=>true).catch(()=>false);
+      if(!clicked)continue;
+      const response=await responsePromise;
+      if(response)console.log(`[cordial] POST del botón: HTTP ${response.status()} · ${response.url()}`);
+      if(await waitForBookingResult(page,20000))return true;
+    }
 
-  // Fallback 1: requestSubmit() conserva listeners y validación HTML.
-  if(await form.count().catch(()=>0)){
-    console.log('[cordial] El botón no abrió resultados; probando requestSubmit() del formulario.');
-    const stableRequest=await stabilizeBookingControls(page,form);
-    if(!stableRequest.ok)return false;
-    const requested=await form.evaluate(f=>{try{f.requestSubmit();return true;}catch{return false;}}).catch(()=>false);
-    if(requested&&await waitForBookingResult(page,16000))return true;
+    if(await form.count().catch(()=>0)){
+      console.log('[cordial] El botón no abrió resultados; probando requestSubmit() del formulario.');
+      const stableRequest=await stabilizeBookingControls(page,form,critical);
+      if(!stableRequest.ok)return false;
+      const requested=await form.evaluate(f=>{try{f.requestSubmit();return true;}catch{return false;}}).catch(()=>false);
+      if(requested&&await waitForBookingResult(page,16000))return true;
 
-    // Fallback 2: POST directo desde el mismo BrowserContext. Comparte cookies/CSRF
-    // y nos permite ver si el servidor rechaza algún campo del formulario.
-    console.log('[cordial] requestSubmit() no abrió resultados; probando POST directo con la sesión del navegador.');
-    if(await postFormDirect(page,form))return true;
+      console.log('[cordial] requestSubmit() no abrió resultados; probando POST directo con la sesión del navegador.');
+      if(await postFormDirect(page,form,critical))return true;
 
-    // Fallback 3: envío HTML nativo, como último recurso.
-    console.log('[cordial] POST directo no abrió resultados; probando submit() HTML nativo.');
-    const stableNative=await stabilizeBookingControls(page,form);
-    if(!stableNative.ok)return false;
-    const submitted=await form.evaluate(f=>{try{HTMLFormElement.prototype.submit.call(f);return true;}catch{return false;}}).catch(()=>false);
-    if(submitted&&await waitForBookingResult(page,20000))return true;
-  }
-  await snapshot(page,'cordial-formulario-fallido').catch(()=>{});
-  return false;
+      console.log('[cordial] POST directo no abrió resultados; probando submit() HTML nativo.');
+      const stableNative=await stabilizeBookingControls(page,form,critical);
+      if(!stableNative.ok)return false;
+      const submitted=await form.evaluate(f=>{try{HTMLFormElement.prototype.submit.call(f);return true;}catch{return false;}}).catch(()=>false);
+      if(submitted&&await waitForBookingResult(page,20000))return true;
+    }
+    await snapshot(page,'cordial-formulario-fallido').catch(()=>{});
+    return false;
+  }finally{await removeGuard();}
 }
 async function selectClubTab(page){
   const tab=page.getByText(/Tarifa Club Cordial/i).first();if(await visible(tab)){await tab.click().catch(()=>{});await page.waitForTimeout(800);return true;}return false;
