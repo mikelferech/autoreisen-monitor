@@ -1,0 +1,43 @@
+name: Cordial · MFE Viajes
+
+on:
+  schedule:
+    - cron: '0 8 * * *'
+      timezone: "Europe/Madrid"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cordial-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: monitoring
+    env:
+      MFE_WORKER_URL: ${{ secrets.MFE_WORKER_URL }}
+      MFE_MONITOR_SECRET: ${{ secrets.MFE_MONITOR_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: monitoring/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: node cordial-run.mjs
+      - name: Guardar diagnóstico si falla
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cordial-diagnostico
+          path: monitoring/artifacts/
+          if-no-files-found: ignore
+          retention-days: 7
