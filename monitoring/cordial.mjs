@@ -1,4 +1,4 @@
-// MFE_CORDIAL_AUTOMATION_VERSION: 2.1.91
+// MFE_CORDIAL_AUTOMATION_VERSION: 2.1.92
 import {isoNow,snapshot,acceptCookies} from './lib.mjs';
 
 const normalize=value=>String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/\s+/g,' ').trim();
@@ -16,21 +16,47 @@ function targetMatches(row,config){
   return (!room||normalize(row.roomType).includes(room))&&(!rate||normalize(row.rateName).includes(rate))&&(!board||normalize(row.board).includes(board));
 }
 async function chooseHotel(page,config){
-  const existingCode=page.locator('input[name="hotel_codes"]').first();
-  const currentCode=await existingCode.inputValue().catch(()=> '');
-  if(String(currentCode||'').trim())return true;
   const wanted=config.hotel||'Cordial Santa Águeda & Perchel Beach Club';
+  const code=page.locator('input[name="hotel_codes"]').first();
+  const destination=page.locator('input[name="destination_id"]').first();
+  const before={code:await code.inputValue().catch(()=>''),destination:await destination.inputValue().catch(()=>'' )};
+
+  // Aunque la página del hotel ya traiga AGUEDA en hotel_codes, volvemos a seleccionar
+  // el hotel en el control visual. El motor de BeCordial mantiene estado JS adicional
+  // que no siempre queda inicializado solo con el hidden pre-rellenado.
   const candidates=[
-    page.locator('input[placeholder*="destino" i],input[placeholder*="hotel" i]').first(),
-    page.locator('input[name*="hotel" i],input[name*="destination" i]').first()
+    page.locator('input[placeholder*="destino" i],input[placeholder*="hotel" i]').first()
   ];
+  let selected=false;
   for(const input of candidates){
     if(!await visible(input))continue;
-    await input.click().catch(()=>{});await input.fill(wanted).catch(()=>{});await page.waitForTimeout(350);
-    const option=page.getByText(/Cordial Santa Águeda.*Perchel Beach Club/i).last();if(await visible(option)){await option.click().catch(()=>{});return true;}
+    try{
+      await input.click({force:true});
+      await input.press('Control+A').catch(()=>{});
+      await input.fill('Cordial Santa Águeda').catch(()=>{});
+      await page.waitForTimeout(500);
+      const options=page.getByText(/Cordial Santa Águeda.*Perchel Beach Club/i);
+      const count=await options.count().catch(()=>0);
+      for(let i=count-1;i>=0;i--){const option=options.nth(i);if(await visible(option)){await option.click({force:true}).catch(()=>{});selected=true;break;}}
+      if(selected)break;
+    }catch{}
   }
-  const hotelOption=page.getByText(/Cordial Santa Águeda.*Perchel Beach Club/i).last();if(await visible(hotelOption)){await hotelOption.click().catch(()=>{});return true;}
-  return false;
+
+  // Otra vía: algunos builds dibujan la opción como elemento con atributos data-*.
+  if(!selected){
+    const dataOption=page.locator('[data-code="AGUEDA"],[data-value="AGUEDA"],[data-hotel-code="AGUEDA"]').last();
+    if(await visible(dataOption)){await dataOption.click({force:true}).catch(()=>{});selected=true;}
+  }
+  await page.waitForTimeout(250);
+
+  // Si la UI no ha podido re-seleccionar el hotel, preservamos el código que la propia
+  // página del Santa Águeda trae precargado. Nunca inventamos destination_id.
+  let currentCode=await code.inputValue().catch(()=> '');
+  if(!String(currentCode||'').trim()&&String(before.code||'').trim())await forceControlValue(code,before.code).catch(()=>false);
+  currentCode=await code.inputValue().catch(()=> '');
+  const currentDestination=await destination.inputValue().catch(()=> '');
+  console.log(`[cordial] Hotel preparado: code=${currentCode||'—'} · destination_id=${currentDestination||'—'} · reselección=${selected?'sí':'no'}`);
+  return Boolean(String(currentCode||'').trim());
 }
 async function forceControlValue(loc,value){
   if(!loc||await loc.count().catch(()=>0)<1)return false;
@@ -144,15 +170,47 @@ async function waitForBookingResult(page,timeout=45000){
   }
   return false;
 }
+async function formState(page,form){
+  if(!await form.count().catch(()=>0))return null;
+  return form.evaluate(f=>{
+    const invalid=[...f.elements].filter(el=>typeof el.checkValidity==='function'&&!el.checkValidity()).map(el=>({name:el.name||'',type:el.type||'',value:el.value||'',validation:el.validationMessage||''}));
+    const data=[];for(const [key,value] of new FormData(f).entries())data.push([key,String(value)]);
+    return {action:f.action||'',method:(f.method||'get').toUpperCase(),id:f.id||'',valid:f.checkValidity(),invalid,data};
+  }).catch(()=>null);
+}
+async function postFormDirect(page,form){
+  const state=await formState(page,form);if(!state?.action)return false;
+  const params=new URLSearchParams();for(const [key,value] of state.data||[])params.append(key,value);
+  console.log(`[cordial] POST directo de diagnóstico: ${state.action} · valid=${state.valid?'sí':'no'} · destination_id=${(state.data||[]).find(x=>x[0]==='destination_id')?.[1]||'—'} · hotel_codes=${(state.data||[]).find(x=>x[0]==='hotel_codes')?.[1]||'—'}`);
+  if(state.invalid?.length)console.log(`[cordial] Controles HTML inválidos: ${JSON.stringify(state.invalid)}`);
+  try{
+    const response=await page.context().request.post(state.action,{data:params.toString(),headers:{'Content-Type':'application/x-www-form-urlencoded','Referer':page.url()},maxRedirects:0,timeout:30000});
+    const status=response.status(),location=response.headers()['location']||'';
+    console.log(`[cordial] Respuesta POST directa: HTTP ${status}${location?` · Location=${location}`:''}`);
+    if(status>=300&&status<400&&location){const next=new URL(location,state.action).href;await page.goto(next,{waitUntil:'domcontentloaded',timeout:45000});return await waitForBookingResult(page,25000);}
+    const html=await response.text().catch(()=>'');
+    if(/Tarifa Club Cordial|Classic Duplex|booking\/process\/room/i.test(html)){
+      // Si el servidor devolvió los resultados directamente, los cargamos en la página
+      // para reutilizar el mismo parser y no hacer una segunda petición distinta.
+      await page.setContent(html,{waitUntil:'domcontentloaded',timeout:30000}).catch(()=>{});
+      return true;
+    }
+    const plain=html.replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ').replace(/&nbsp;|&#160;/g,' ').replace(/\s+/g,' ').trim();
+    const clues=plain.match(/.{0,90}(?:obligatorio|requerido|required|error|selecciona|seleccione|fecha|hu[eé]sped|destino|hotel).{0,160}/gi)||[];
+    console.log(`[cordial] Respuesta sin resultados. Pistas: ${(clues.slice(0,6).join(' | ')||plain.slice(0,900)||'sin texto')}`);
+  }catch(error){console.log(`[cordial] POST directo falló: ${error?.message||String(error)}`);}
+  return false;
+}
 async function submitSearch(page){
   const bookingInput=page.locator('input[name="hotel_codes"]').first();
   const form=bookingInput.locator('xpath=ancestor::form[1]');
-  if(await form.count().catch(()=>0)){
-    const meta=await form.evaluate(f=>({action:f.action||'',method:(f.method||'get').toUpperCase(),id:f.id||'',name:f.getAttribute('name')||''})).catch(()=>null);
-    if(meta)console.log(`[cordial] Formulario de búsqueda: ${meta.method} ${meta.action||'(sin action)'}${meta.id?` · #${meta.id}`:''}`);
+  const initialState=await formState(page,form);
+  if(initialState){
+    console.log(`[cordial] Formulario de búsqueda: ${initialState.method} ${initialState.action||'(sin action)'}${initialState.id?` · #${initialState.id}`:''} · HTML válido=${initialState.valid?'sí':'no'}`);
+    if(initialState.invalid?.length)console.log(`[cordial] Validación HTML: ${JSON.stringify(initialState.invalid)}`);
   }
 
-  // El botón real ha cambiado de implementación varias veces. Probamos tanto roles como CSS/texto.
+  // Probamos primero el botón real y observamos explícitamente la respuesta POST.
   const candidates=[
     page.getByRole('button',{name:/^buscar$/i}).last(),
     page.locator('button').filter({hasText:/^\s*Buscar\s*$/i}).last(),
@@ -166,22 +224,31 @@ async function submitSearch(page){
     const label=(await button.innerText().catch(()=>''))||(await button.getAttribute('value').catch(()=>''))||'botón';
     console.log(`[cordial] Intentando búsqueda con: ${String(label).trim()||'botón visible'}`);
     await button.scrollIntoViewIfNeeded().catch(()=>{});
+    const responsePromise=page.waitForResponse(r=>/\/booking\/process\/?(?:$|\?)/i.test(r.url())&&r.request().method()==='POST',{timeout:10000}).catch(()=>null);
     const clicked=await button.click({force:true,timeout:5000}).then(()=>true).catch(()=>false);
     if(!clicked)continue;
+    const response=await responsePromise;
+    if(response)console.log(`[cordial] POST del botón: HTTP ${response.status()} · ${response.url()}`);
     if(await waitForBookingResult(page,20000))return true;
   }
 
-  // Fallback 1: pedir al propio formulario que se envíe. Esto conserva sus listeners JS.
+  // Fallback 1: requestSubmit() conserva listeners y validación HTML.
   if(await form.count().catch(()=>0)){
     console.log('[cordial] El botón no abrió resultados; probando requestSubmit() del formulario.');
     const requested=await form.evaluate(f=>{try{f.requestSubmit();return true;}catch{return false;}}).catch(()=>false);
-    if(requested&&await waitForBookingResult(page,20000))return true;
+    if(requested&&await waitForBookingResult(page,16000))return true;
 
-    // Fallback 2: envío HTML nativo. Evita que el widget visual sobrescriba date_from/date_to.
-    console.log('[cordial] requestSubmit() no abrió resultados; probando submit() HTML nativo.');
+    // Fallback 2: POST directo desde el mismo BrowserContext. Comparte cookies/CSRF
+    // y nos permite ver si el servidor rechaza algún campo del formulario.
+    console.log('[cordial] requestSubmit() no abrió resultados; probando POST directo con la sesión del navegador.');
+    if(await postFormDirect(page,form))return true;
+
+    // Fallback 3: envío HTML nativo, como último recurso.
+    console.log('[cordial] POST directo no abrió resultados; probando submit() HTML nativo.');
     const submitted=await form.evaluate(f=>{try{HTMLFormElement.prototype.submit.call(f);return true;}catch{return false;}}).catch(()=>false);
-    if(submitted&&await waitForBookingResult(page,30000))return true;
+    if(submitted&&await waitForBookingResult(page,20000))return true;
   }
+  await snapshot(page,'cordial-formulario-fallido').catch(()=>{});
   return false;
 }
 async function selectClubTab(page){
@@ -242,4 +309,4 @@ export async function monitorCordial(browser,config={}){
   }finally{await context.close();}
 }
 
-export const __cordialTest={parseCordialText,targetMatches,normalize,fillDateInputs,forceControlValue,syncVisibleDateRange,submitSearch};
+export const __cordialTest={parseCordialText,targetMatches,normalize,fillDateInputs,forceControlValue,syncVisibleDateRange,submitSearch,formState};
