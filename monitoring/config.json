@@ -41,5 +41,25 @@
     "pickupOfficeId": "18",
     "dropoffOfficeId": "18",
     "carId": "119"
+  },
+  "cordial": {
+    "hotel": "Cordial Santa Águeda & Perchel Beach Club",
+    "checkIn": "2026-09-14",
+    "checkOut": "2026-09-21",
+    "adults": 2,
+    "children": 0,
+    "targetRoom": "Classic Duplex",
+    "targetRate": "Club Cordial - Reserva Online",
+    "targetBoard": "SOLO ALOJAMIENTO",
+    "reservedPrice": 0,
+    "searchUrl": "https://www.becordial.com/gran-canaria-sur/cordial-santa-agueda/",
+    "enabled": true,
+    "scheduleMode": "daily",
+    "scheduleTime": "08:00",
+    "scheduleTimeZone": "Europe/Madrid",
+    "title": "Cordial Santa Águeda",
+    "color": "#35a5d6",
+    "gradient1": "#113b58",
+    "gradient2": "#166b91"
   }
 }
