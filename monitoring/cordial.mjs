@@ -1,4 +1,4 @@
-// MFE_CORDIAL_AUTOMATION_VERSION: 2.1.90
+// MFE_CORDIAL_AUTOMATION_VERSION: 2.1.91
 import {isoNow,snapshot,acceptCookies} from './lib.mjs';
 
 const normalize=value=>String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/\s+/g,' ').trim();
@@ -45,6 +45,37 @@ async function forceControlValue(loc,value){
     return String(await loc.first().inputValue().catch(()=>''))===String(value);
   }catch{return false;}
 }
+async function syncVisibleDateRange(page,checkIn,checkOut){
+  // BeCordial mantiene un campo visual de rango separado de date_from/date_to.
+  // Si ese texto se queda con las fechas anteriores, su JS puede considerar la búsqueda incompleta.
+  const rangeText=await page.evaluate(([from,to])=>{
+    const fmt=value=>new Intl.DateTimeFormat('es-ES',{weekday:'short',day:'numeric',month:'short'}).format(new Date(`${value}T12:00:00`)).replace(/,/g,'').replace(/\./g,'').trim();
+    return `${fmt(from)} - ${fmt(to)}`;
+  },[checkIn,checkOut]).catch(()=>`${checkIn} - ${checkOut}`);
+  const form=page.locator('input[name="hotel_codes"]').first().locator('xpath=ancestor::form[1]');
+  const scope=await form.count().catch(()=>0)?form:page.locator('body');
+  const inputs=scope.locator('input[type="text"]');
+  const count=await inputs.count().catch(()=>0);
+  for(let i=0;i<count;i++){
+    const input=inputs.nth(i),value=String(await input.inputValue().catch(()=>''));
+    const name=String(await input.getAttribute('name').catch(()=>''));
+    const placeholder=String(await input.getAttribute('placeholder').catch(()=>''));
+    if(/promo|email|password|key/i.test(`${name} ${placeholder}`))continue;
+    if(!(/\b(ene|feb|mar|abr|may|jun|jul|ago|sept|sep|oct|nov|dic)\b/i.test(value)&&/\s[-–]\s/.test(value)))continue;
+    try{
+      await input.evaluate((el,v)=>{
+        const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')?.set;
+        if(setter)setter.call(el,v);else el.value=v;
+        el.dispatchEvent(new Event('input',{bubbles:true}));
+        el.dispatchEvent(new Event('change',{bubbles:true}));
+        el.dispatchEvent(new Event('blur',{bubbles:true}));
+      },rangeText);
+      console.log(`[cordial] Rango visual sincronizado: ${rangeText}`);
+      return true;
+    }catch{}
+  }
+  return false;
+}
 async function fillDateInputs(page,config){
   const checkIn=String(config.checkIn||''),checkOut=String(config.checkOut||'');
   if(!/^\d{4}-\d{2}-\d{2}$/.test(checkIn)||!/^\d{4}-\d{2}-\d{2}$/.test(checkOut))throw new Error('Las fechas de Cordial no son válidas.');
@@ -57,6 +88,7 @@ async function fillDateInputs(page,config){
   if(hasExactIn&&hasExactOut){
     const okIn=await forceControlValue(exactIn,checkIn),okOut=await forceControlValue(exactOut,checkOut);
     if(okIn&&okOut){
+      await syncVisibleDateRange(page,checkIn,checkOut).catch(()=>false);
       console.log(`[cordial] Fechas aplicadas al formulario: ${checkIn} → ${checkOut}`);
       return true;
     }
@@ -99,18 +131,56 @@ async function setAdults(page,config){
   const text=await page.locator('body').innerText().catch(()=> '');if(new RegExp(`\\b${adults}\\s+adultos?\\b`,'i').test(text))return true;
   return false;
 }
+async function bookingResultReady(page){
+  if(/\/booking\/process\/room/i.test(page.url()))return true;
+  const result=page.getByText(/Tarifa Club Cordial|Tarifa Estándar|Classic Duplex/i).first();
+  return visible(result);
+}
+async function waitForBookingResult(page,timeout=45000){
+  const started=Date.now();
+  while(Date.now()-started<timeout){
+    if(await bookingResultReady(page))return true;
+    await page.waitForTimeout(350);
+  }
+  return false;
+}
 async function submitSearch(page){
-  const candidates=[page.getByRole('button',{name:/^buscar$/i}).last(),page.getByRole('button',{name:/reservar|ver precios|consultar disponibilidad/i}).first(),page.locator('button[type="submit"],input[type="submit"]').last()];
+  const bookingInput=page.locator('input[name="hotel_codes"]').first();
+  const form=bookingInput.locator('xpath=ancestor::form[1]');
+  if(await form.count().catch(()=>0)){
+    const meta=await form.evaluate(f=>({action:f.action||'',method:(f.method||'get').toUpperCase(),id:f.id||'',name:f.getAttribute('name')||''})).catch(()=>null);
+    if(meta)console.log(`[cordial] Formulario de búsqueda: ${meta.method} ${meta.action||'(sin action)'}${meta.id?` · #${meta.id}`:''}`);
+  }
+
+  // El botón real ha cambiado de implementación varias veces. Probamos tanto roles como CSS/texto.
+  const candidates=[
+    page.getByRole('button',{name:/^buscar$/i}).last(),
+    page.locator('button').filter({hasText:/^\s*Buscar\s*$/i}).last(),
+    page.locator('input[type="submit"][value*="buscar" i]').last(),
+    page.locator('[role="button"]').filter({hasText:/^\s*Buscar\s*$/i}).last(),
+    page.getByRole('button',{name:/reservar|ver precios|consultar disponibilidad/i}).first(),
+    page.locator('button[type="submit"],input[type="submit"]').last()
+  ];
   for(const button of candidates){
     if(!await visible(button))continue;
-    await button.click().catch(()=>{});
-    await Promise.race([
-      page.waitForURL(/\/booking\/process\/room/i,{timeout:45000}).catch(()=>{}),
-      page.getByText(/Tarifa Club Cordial|Tarifa Estándar|Classic Duplex/i).first().waitFor({state:'visible',timeout:45000}).catch(()=>{})
-    ]);
-    await page.waitForLoadState('domcontentloaded',{timeout:15000}).catch(()=>{});
-    await page.waitForTimeout(2500);
-    return true;
+    const label=(await button.innerText().catch(()=>''))||(await button.getAttribute('value').catch(()=>''))||'botón';
+    console.log(`[cordial] Intentando búsqueda con: ${String(label).trim()||'botón visible'}`);
+    await button.scrollIntoViewIfNeeded().catch(()=>{});
+    const clicked=await button.click({force:true,timeout:5000}).then(()=>true).catch(()=>false);
+    if(!clicked)continue;
+    if(await waitForBookingResult(page,20000))return true;
+  }
+
+  // Fallback 1: pedir al propio formulario que se envíe. Esto conserva sus listeners JS.
+  if(await form.count().catch(()=>0)){
+    console.log('[cordial] El botón no abrió resultados; probando requestSubmit() del formulario.');
+    const requested=await form.evaluate(f=>{try{f.requestSubmit();return true;}catch{return false;}}).catch(()=>false);
+    if(requested&&await waitForBookingResult(page,20000))return true;
+
+    // Fallback 2: envío HTML nativo. Evita que el widget visual sobrescriba date_from/date_to.
+    console.log('[cordial] requestSubmit() no abrió resultados; probando submit() HTML nativo.');
+    const submitted=await form.evaluate(f=>{try{HTMLFormElement.prototype.submit.call(f);return true;}catch{return false;}}).catch(()=>false);
+    if(submitted&&await waitForBookingResult(page,30000))return true;
   }
   return false;
 }
@@ -146,7 +216,9 @@ export function parseCordialText(text,headingTexts=[],config={}){
 }
 async function diagnostic(page){
   const inputs=await page.locator('input,select').evaluateAll(nodes=>nodes.slice(0,50).map(el=>({tag:el.tagName,name:el.getAttribute('name')||'',type:el.getAttribute('type')||'',placeholder:el.getAttribute('placeholder')||'',value:el.value||''}))).catch(()=>[]);
-  return `URL final: ${page.url()}. Controles: ${inputs.map(x=>`${x.tag}:${x.name||x.placeholder||x.type}=${x.value}`).slice(0,18).join('; ')}`;
+  const forms=await page.locator('form').evaluateAll(nodes=>nodes.slice(0,12).map(f=>({action:f.action||'',method:(f.method||'get').toUpperCase(),id:f.id||'',name:f.getAttribute('name')||''}))).catch(()=>[]);
+  const actions=await page.locator('button,input[type="submit"],[role="button"]').evaluateAll(nodes=>nodes.slice(0,40).map(el=>({tag:el.tagName,text:(el.innerText||el.value||el.getAttribute('aria-label')||'').trim(),type:el.getAttribute('type')||'',visible:!!(el.offsetWidth||el.offsetHeight||el.getClientRects().length)}))).catch(()=>[]);
+  return `URL final: ${page.url()}. Controles: ${inputs.map(x=>`${x.tag}:${x.name||x.placeholder||x.type}=${x.value}`).slice(0,18).join('; ')}. Formularios: ${forms.map(x=>`${x.method} ${x.action||'(sin action)'}${x.id?`#${x.id}`:''}`).join(' | ')||'ninguno'}. Botones: ${actions.map(x=>`${x.visible?'V':'H'}:${x.tag}:${x.text||x.type}`).slice(0,18).join(' | ')||'ninguno'}`;
 }
 export async function monitorCordial(browser,config={}){
   const context=await browser.newContext({locale:'es-ES',timezoneId:'Atlantic/Canary',viewport:{width:1440,height:1300},userAgent:'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140 Safari/537.36'});const page=await context.newPage();
@@ -170,4 +242,4 @@ export async function monitorCordial(browser,config={}){
   }finally{await context.close();}
 }
 
-export const __cordialTest={parseCordialText,targetMatches,normalize,fillDateInputs,forceControlValue};
+export const __cordialTest={parseCordialText,targetMatches,normalize,fillDateInputs,forceControlValue,syncVisibleDateRange,submitSearch};
