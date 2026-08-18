@@ -1,4 +1,4 @@
-// MFE_CORDIAL_AUTOMATION_VERSION: 2.1.94
+// MFE_CORDIAL_AUTOMATION_VERSION: 2.1.95
 import {isoNow,snapshot,acceptCookies} from './lib.mjs';
 
 const normalize=value=>String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/\s+/g,' ').trim();
@@ -90,7 +90,7 @@ async function chooseHotel(page,config){
   // que utiliza un usuario real, y verificamos los hidden antes de lanzar la búsqueda.
   let destinationSelected=false,hotelSelected=false;
 
-  // v2.1.94: el diagnóstico real de BeCordial mostró que el selector ya deja en el DOM
+  // v2.1.95: el diagnóstico real de BeCordial mostró que el selector ya deja en el DOM
   // nodos ocultos seleccionados con destination_id (p. ej. el destino y el hotel), aunque
   // el input hidden destination_id siga vacío. Recuperamos ese identificador del propio DOM
   // antes de intentar manipular visualmente el autocomplete. No se hardcodea ningún ID.
@@ -169,6 +169,16 @@ async function chooseHotel(page,config){
     const diag=await optionDiagnostics(page,/Gran Canaria\s*-\s*Sur|Cordial Santa Águeda/i).catch(()=>[]);
     console.log(`[cordial] No se obtuvo destination_id. Diagnóstico del selector: ${JSON.stringify(diag.slice(0,8))}`);
     return false;
+  }
+  // Guardamos los valores críticos en el propio formulario. El JS de BeCordial puede
+  // vaciar hotel_codes al procesar el botón Buscar aunque el hotel ya estuviera elegido.
+  // Estos atributos internos nos permiten restaurarlos justo antes de cada intento de envío.
+  const bookingForm=code.locator('xpath=ancestor::form[1]');
+  if(await bookingForm.count().catch(()=>0)){
+    await bookingForm.evaluate((f,data)=>{
+      f.setAttribute('data-mfe-hotel-code',data.hotelCode);
+      f.setAttribute('data-mfe-destination-id',data.destinationId);
+    },{hotelCode:currentCode,destinationId:currentDestination}).catch(()=>{});
   }
   return true;
 }
@@ -284,6 +294,30 @@ async function waitForBookingResult(page,timeout=45000){
   }
   return false;
 }
+async function stabilizeBookingControls(page,form=null){
+  const hotel=page.locator('input[name="hotel_codes"]').first();
+  const destination=page.locator('input[name="destination_id"]').first();
+  const targetForm=form&&await form.count().catch(()=>0)?form:hotel.locator('xpath=ancestor::form[1]');
+  if(!await targetForm.count().catch(()=>0))return {ok:false,hotelCode:'',destinationId:''};
+  const remembered=await targetForm.evaluate(f=>({
+    hotelCode:f.getAttribute('data-mfe-hotel-code')||'',
+    destinationId:f.getAttribute('data-mfe-destination-id')||''
+  })).catch(()=>({hotelCode:'',destinationId:''}));
+  let hotelCode=String(await hotel.inputValue().catch(()=>'' )).trim();
+  let destinationId=String(await destination.inputValue().catch(()=>'' )).trim();
+  let restored=false;
+  if(!hotelCode&&remembered.hotelCode){
+    restored=await forceControlValue(hotel,remembered.hotelCode).catch(()=>false)||restored;
+    hotelCode=String(await hotel.inputValue().catch(()=>'' )).trim();
+  }
+  if(!destinationId&&remembered.destinationId){
+    restored=await forceControlValue(destination,remembered.destinationId).catch(()=>false)||restored;
+    destinationId=String(await destination.inputValue().catch(()=>'' )).trim();
+  }
+  if(restored)console.log(`[cordial] Controles restaurados antes del envío: destination_id=${destinationId||'—'} · hotel_codes=${hotelCode||'—'}`);
+  return {ok:Boolean(hotelCode&&destinationId),hotelCode,destinationId};
+}
+
 async function formState(page,form){
   if(!await form.count().catch(()=>0))return null;
   return form.evaluate(f=>{
@@ -293,6 +327,8 @@ async function formState(page,form){
   }).catch(()=>null);
 }
 async function postFormDirect(page,form){
+  const stable=await stabilizeBookingControls(page,form);
+  if(!stable.ok){console.log(`[cordial] POST directo cancelado: faltan controles críticos · destination_id=${stable.destinationId||'—'} · hotel_codes=${stable.hotelCode||'—'}`);return false;}
   const state=await formState(page,form);if(!state?.action)return false;
   const params=new URLSearchParams();for(const [key,value] of state.data||[])params.append(key,value);
   console.log(`[cordial] POST directo de diagnóstico: ${state.action} · valid=${state.valid?'sí':'no'} · destination_id=${(state.data||[]).find(x=>x[0]==='destination_id')?.[1]||'—'} · hotel_codes=${(state.data||[]).find(x=>x[0]==='hotel_codes')?.[1]||'—'}`);
@@ -318,6 +354,9 @@ async function postFormDirect(page,form){
 async function submitSearch(page){
   const bookingInput=page.locator('input[name="hotel_codes"]').first();
   const form=bookingInput.locator('xpath=ancestor::form[1]');
+  const initialCritical=await stabilizeBookingControls(page,form);
+  console.log(`[cordial] Controles críticos antes de enviar: destination_id=${initialCritical.destinationId||'—'} · hotel_codes=${initialCritical.hotelCode||'—'}`);
+  if(!initialCritical.ok)return false;
   const initialState=await formState(page,form);
   if(initialState){
     console.log(`[cordial] Formulario de búsqueda: ${initialState.method} ${initialState.action||'(sin action)'}${initialState.id?` · #${initialState.id}`:''} · HTML válido=${initialState.valid?'sí':'no'}`);
@@ -337,6 +376,8 @@ async function submitSearch(page){
     if(!await visible(button))continue;
     const label=(await button.innerText().catch(()=>''))||(await button.getAttribute('value').catch(()=>''))||'botón';
     console.log(`[cordial] Intentando búsqueda con: ${String(label).trim()||'botón visible'}`);
+    const stable=await stabilizeBookingControls(page,form);
+    if(!stable.ok)continue;
     await button.scrollIntoViewIfNeeded().catch(()=>{});
     const responsePromise=page.waitForResponse(r=>/\/booking\/process\/?(?:$|\?)/i.test(r.url())&&r.request().method()==='POST',{timeout:10000}).catch(()=>null);
     const clicked=await button.click({force:true,timeout:5000}).then(()=>true).catch(()=>false);
@@ -349,6 +390,8 @@ async function submitSearch(page){
   // Fallback 1: requestSubmit() conserva listeners y validación HTML.
   if(await form.count().catch(()=>0)){
     console.log('[cordial] El botón no abrió resultados; probando requestSubmit() del formulario.');
+    const stableRequest=await stabilizeBookingControls(page,form);
+    if(!stableRequest.ok)return false;
     const requested=await form.evaluate(f=>{try{f.requestSubmit();return true;}catch{return false;}}).catch(()=>false);
     if(requested&&await waitForBookingResult(page,16000))return true;
 
@@ -359,6 +402,8 @@ async function submitSearch(page){
 
     // Fallback 3: envío HTML nativo, como último recurso.
     console.log('[cordial] POST directo no abrió resultados; probando submit() HTML nativo.');
+    const stableNative=await stabilizeBookingControls(page,form);
+    if(!stableNative.ok)return false;
     const submitted=await form.evaluate(f=>{try{HTMLFormElement.prototype.submit.call(f);return true;}catch{return false;}}).catch(()=>false);
     if(submitted&&await waitForBookingResult(page,20000))return true;
   }
@@ -424,4 +469,4 @@ export async function monitorCordial(browser,config={}){
   }finally{await context.close();}
 }
 
-export const __cordialTest={parseCordialText,targetMatches,normalize,fillDateInputs,forceControlValue,syncVisibleDateRange,submitSearch,formState};
+export const __cordialTest={parseCordialText,targetMatches,normalize,fillDateInputs,forceControlValue,syncVisibleDateRange,submitSearch,formState,stabilizeBookingControls};
