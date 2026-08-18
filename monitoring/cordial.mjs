@@ -1,4 +1,4 @@
-// MFE_CORDIAL_AUTOMATION_VERSION: 2.1.92
+// MFE_CORDIAL_AUTOMATION_VERSION: 2.1.93
 import {isoNow,snapshot,acceptCookies} from './lib.mjs';
 
 const normalize=value=>String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/\s+/g,' ').trim();
@@ -15,48 +15,141 @@ function targetMatches(row,config){
   const room=normalize(config.targetRoom||'Classic Duplex'),rate=normalize(config.targetRate||'Club Cordial - Reserva Online'),board=normalize(config.targetBoard||'SOLO ALOJAMIENTO');
   return (!room||normalize(row.roomType).includes(room))&&(!rate||normalize(row.rateName).includes(rate))&&(!board||normalize(row.board).includes(board));
 }
+async function optionDiagnostics(page,pattern){
+  const rows=[];
+  const candidates=page.locator('[role="option"],li,[data-id],[data-value],[data-code],[data-hotel-code],[data-destination-id]');
+  const count=Math.min(await candidates.count().catch(()=>0),250);
+  for(let i=0;i<count;i++){
+    const el=candidates.nth(i);
+    const text=String(await el.innerText().catch(()=>'' )).replace(/\s+/g,' ').trim();
+    if(!text||!pattern.test(text))continue;
+    const attrs=await el.evaluate(node=>{
+      const out={};for(const name of ['role','value','data-id','data-value','data-code','data-hotel-code','data-destination-id','data-type','id','class']){const v=node.getAttribute?.(name);if(v)out[name]=v;}return out;
+    }).catch(()=>({}));
+    rows.push({text,attrs,visible:await visible(el)});
+    if(rows.length>=12)break;
+  }
+  return rows;
+}
+async function selectAutocompleteValue(page,input,text,pattern){
+  if(!await visible(input))return false;
+  try{
+    await input.click({force:true});
+    await input.press('Control+A').catch(()=>{});
+    await input.press('Backspace').catch(()=>{});
+    await input.pressSequentially(text,{delay:35}).catch(async()=>{await input.fill(text).catch(()=>{});});
+    await page.waitForTimeout(700);
+
+    const targeted=[
+      page.locator('[role="option"]').filter({hasText:pattern}),
+      page.locator('.ui-autocomplete li,.select2-results__option,.choices__item--choice,.tt-suggestion,.autocomplete-suggestion').filter({hasText:pattern}),
+      page.getByText(pattern)
+    ];
+    for(const group of targeted){
+      const count=await group.count().catch(()=>0);
+      for(let i=count-1;i>=0;i--){
+        const option=group.nth(i);
+        if(!await visible(option))continue;
+        const box=await option.boundingBox().catch(()=>null);
+        if(!box||box.width<20||box.height<10)continue;
+        if(await option.click({force:true,timeout:3000}).then(()=>true).catch(()=>false)){await page.waitForTimeout(450);return true;}
+      }
+    }
+
+    // Muchos autocompletados aceptan teclado aunque sus opciones no sean fáciles de localizar.
+    await input.press('ArrowDown').catch(()=>{});
+    await page.waitForTimeout(120);
+    await input.press('Enter').catch(()=>{});
+    await page.waitForTimeout(450);
+    return true;
+  }catch{return false;}
+}
+async function deriveHiddenFromRenderedOption(page,pattern,kind){
+  const info=await optionDiagnostics(page,pattern);
+  const preferred=kind==='destination'
+    ?['data-destination-id','data-id','data-value','value','data-code']
+    :['data-hotel-code','data-code','data-value','value','data-id'];
+  for(const row of info){
+    for(const key of preferred){
+      const value=String(row.attrs?.[key]||'').trim();
+      if(value)return {value,source:`${key} de «${row.text}»`,rows:info};
+    }
+  }
+  return {value:'',source:'',rows:info};
+}
 async function chooseHotel(page,config){
   const wanted=config.hotel||'Cordial Santa Águeda & Perchel Beach Club';
   const code=page.locator('input[name="hotel_codes"]').first();
   const destination=page.locator('input[name="destination_id"]').first();
+  const visual=page.locator('input[placeholder*="destino" i],input[placeholder*="hotel" i]').first();
   const before={code:await code.inputValue().catch(()=>''),destination:await destination.inputValue().catch(()=>'' )};
 
-  // Aunque la página del hotel ya traiga AGUEDA en hotel_codes, volvemos a seleccionar
-  // el hotel en el control visual. El motor de BeCordial mantiene estado JS adicional
-  // que no siempre queda inicializado solo con el hidden pre-rellenado.
-  const candidates=[
-    page.locator('input[placeholder*="destino" i],input[placeholder*="hotel" i]').first()
-  ];
-  let selected=false;
-  for(const input of candidates){
-    if(!await visible(input))continue;
-    try{
-      await input.click({force:true});
-      await input.press('Control+A').catch(()=>{});
-      await input.fill('Cordial Santa Águeda').catch(()=>{});
+  // En la página específica del hotel, BeCordial precarga hotel_codes=AGUEDA pero deja
+  // destination_id vacío. El servidor devuelve de nuevo el buscador si se envía así.
+  // Por eso seleccionamos primero el destino y después el hotel usando el mismo autocomplete
+  // que utiliza un usuario real, y verificamos los hidden antes de lanzar la búsqueda.
+  let destinationSelected=false,hotelSelected=false;
+  if(await visible(visual)){
+    destinationSelected=await selectAutocompleteValue(page,visual,'Gran Canaria - Sur',/^Gran Canaria\s*-\s*Sur$/i);
+    await page.waitForTimeout(350);
+    let destinationValue=String(await destination.inputValue().catch(()=>'' )).trim();
+    if(!destinationValue){
+      // Si el widget ha dibujado una opción con el identificador en data-*, lo extraemos
+      // del propio DOM. No usamos IDs inventados ni constantes externas.
+      await visual.click({force:true}).catch(()=>{});
+      await visual.press('Control+A').catch(()=>{});
+      await visual.pressSequentially('Gran Canaria - Sur',{delay:25}).catch(()=>{});
       await page.waitForTimeout(500);
-      const options=page.getByText(/Cordial Santa Águeda.*Perchel Beach Club/i);
-      const count=await options.count().catch(()=>0);
-      for(let i=count-1;i>=0;i--){const option=options.nth(i);if(await visible(option)){await option.click({force:true}).catch(()=>{});selected=true;break;}}
-      if(selected)break;
-    }catch{}
+      const derived=await deriveHiddenFromRenderedOption(page,/^Gran Canaria\s*-\s*Sur$/i,'destination');
+      if(derived.value){await forceControlValue(destination,derived.value).catch(()=>false);destinationValue=String(await destination.inputValue().catch(()=>'' )).trim();console.log(`[cordial] destination_id derivado del selector: ${destinationValue||'—'} (${derived.source}).`);}
+      if(!destinationValue&&derived.rows.length)console.log(`[cordial] Opciones de destino detectadas: ${JSON.stringify(derived.rows.slice(0,5))}`);
+    }
+
+    // Una vez inicializado el destino, seleccionamos explícitamente Santa Águeda.
+    hotelSelected=await selectAutocompleteValue(page,visual,'Cordial Santa Águeda',/Cordial Santa Águeda.*Perchel Beach Club/i);
+    await page.waitForTimeout(450);
   }
 
-  // Otra vía: algunos builds dibujan la opción como elemento con atributos data-*.
-  if(!selected){
+  // Algunos builds exponen la opción de hotel directamente con atributos data-*.
+  let currentCode=String(await code.inputValue().catch(()=>'' )).trim();
+  if(!currentCode){
     const dataOption=page.locator('[data-code="AGUEDA"],[data-value="AGUEDA"],[data-hotel-code="AGUEDA"]').last();
-    if(await visible(dataOption)){await dataOption.click({force:true}).catch(()=>{});selected=true;}
+    if(await visible(dataOption)){await dataOption.click({force:true}).catch(()=>{});hotelSelected=true;await page.waitForTimeout(250);currentCode=String(await code.inputValue().catch(()=>'' )).trim();}
   }
-  await page.waitForTimeout(250);
+  if(!currentCode&&String(before.code||'').trim()){
+    await forceControlValue(code,before.code).catch(()=>false);
+    currentCode=String(await code.inputValue().catch(()=>'' )).trim();
+  }
 
-  // Si la UI no ha podido re-seleccionar el hotel, preservamos el código que la propia
-  // página del Santa Águeda trae precargado. Nunca inventamos destination_id.
-  let currentCode=await code.inputValue().catch(()=> '');
-  if(!String(currentCode||'').trim()&&String(before.code||'').trim())await forceControlValue(code,before.code).catch(()=>false);
-  currentCode=await code.inputValue().catch(()=> '');
-  const currentDestination=await destination.inputValue().catch(()=> '');
-  console.log(`[cordial] Hotel preparado: code=${currentCode||'—'} · destination_id=${currentDestination||'—'} · reselección=${selected?'sí':'no'}`);
-  return Boolean(String(currentCode||'').trim());
+  let currentDestination=String(await destination.inputValue().catch(()=>'' )).trim();
+  if(!currentDestination&&String(before.destination||'').trim()){
+    await forceControlValue(destination,before.destination).catch(()=>false);
+    currentDestination=String(await destination.inputValue().catch(()=>'' )).trim();
+  }
+
+  // Último intento: con el hotel ya seleccionado, abrimos de nuevo el autocomplete y
+  // buscamos cualquier nodo visible que represente Gran Canaria - Sur para obtener su ID.
+  if(!currentDestination&&await visible(visual)){
+    await visual.click({force:true}).catch(()=>{});
+    await visual.press('Control+A').catch(()=>{});
+    await visual.pressSequentially('Gran Canaria - Sur',{delay:25}).catch(()=>{});
+    await page.waitForTimeout(500);
+    const derived=await deriveHiddenFromRenderedOption(page,/^Gran Canaria\s*-\s*Sur$/i,'destination');
+    if(derived.value){await forceControlValue(destination,derived.value).catch(()=>false);currentDestination=String(await destination.inputValue().catch(()=>'' )).trim();console.log(`[cordial] destination_id recuperado del DOM: ${currentDestination||'—'} (${derived.source}).`);}
+    // Restauramos el texto visible del hotel para no enviar el formulario con el buscador mostrando destino.
+    await visual.press('Control+A').catch(()=>{});
+    await visual.fill(wanted).catch(()=>{});
+    await visual.dispatchEvent('change').catch(()=>{});
+  }
+
+  console.log(`[cordial] Hotel preparado: code=${currentCode||'—'} · destination_id=${currentDestination||'—'} · destino=${destinationSelected?'sí':'no'} · hotel=${hotelSelected?'sí':'no'}`);
+  if(!currentCode)return false;
+  if(!currentDestination){
+    const diag=await optionDiagnostics(page,/Gran Canaria\s*-\s*Sur|Cordial Santa Águeda/i).catch(()=>[]);
+    console.log(`[cordial] No se obtuvo destination_id. Diagnóstico del selector: ${JSON.stringify(diag.slice(0,8))}`);
+    return false;
+  }
+  return true;
 }
 async function forceControlValue(loc,value){
   if(!loc||await loc.count().catch(()=>0)<1)return false;
@@ -293,7 +386,8 @@ export async function monitorCordial(browser,config={}){
     const url=String(config.searchUrl||'https://www.becordial.com/gran-canaria-sur/cordial-santa-agueda/').trim();
     await page.goto(url,{waitUntil:'domcontentloaded',timeout:45000});await page.waitForTimeout(1800);await acceptCookies(page);
     if(!/\/booking\/process\/room/i.test(page.url())){
-      await chooseHotel(page,config).catch(()=>false);
+      const hotelOk=await chooseHotel(page,config).catch(()=>false);
+      if(!hotelOk){const d=await diagnostic(page);throw new Error(`No se pudo inicializar por completo el destino/hotel de Cordial antes de buscar. ${d}`);}
       const datesOk=await fillDateInputs(page,config).catch(()=>false);await setAdults(page,config).catch(()=>false);
       if(!datesOk){const d=await diagnostic(page);throw new Error(`No se localizaron de forma fiable los campos de fechas del formulario público de Cordial. ${d}`);}
       const submitted=await submitSearch(page);if(!submitted){const d=await diagnostic(page);throw new Error(`No se pudo enviar el formulario de reserva de Cordial. ${d}`);}
