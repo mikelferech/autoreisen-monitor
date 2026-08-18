@@ -1,4 +1,4 @@
-// MFE_CORDIAL_AUTOMATION_VERSION: 2.1.96
+// MFE_CORDIAL_AUTOMATION_VERSION: 2.1.97
 import {isoNow,snapshot,acceptCookies} from './lib.mjs';
 
 const normalize=value=>String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/\s+/g,' ').trim();
@@ -64,6 +64,68 @@ async function selectAutocompleteValue(page,input,text,pattern){
     return true;
   }catch{return false;}
 }
+
+async function selectHotelThroughUi(page,wanted){
+  const visual=page.locator('input[placeholder*="destino" i],input[placeholder*="hotel" i]').first();
+  const code=page.locator('input[name="hotel_codes"]').first();
+  const destination=page.locator('input[name="destination_id"]').first();
+  if(!await visible(visual))return false;
+  const wantedPattern=/Cordial Santa Águeda.*Perchel Beach Club/i;
+  try{
+    // v2.1.97: antes de tocar hidden inputs intentamos reproducir la selección humana real.
+    // El JS de BeCordial mantiene estado interno asociado al autocomplete y, si únicamente
+    // escribimos hotel_codes/destination_id, puede vaciar hotel_codes justo al pulsar Buscar.
+    await visual.click({force:true});
+    await visual.press('Control+A').catch(()=>{});
+    await visual.press('Backspace').catch(()=>{});
+    await visual.pressSequentially(wanted,{delay:22}).catch(async()=>{await visual.fill(wanted).catch(()=>{});});
+    await page.waitForTimeout(650);
+
+    const selector='[role="option"],.ui-autocomplete li,.select2-results__option,.choices__item--choice,.tt-suggestion,.autocomplete-suggestion,[data-hotel-code],[hotel_code],[hotel_codes],[data-code]';
+    const options=page.locator(selector).filter({hasText:wantedPattern});
+    const count=Math.min(await options.count().catch(()=>0),30);
+    for(let i=count-1;i>=0;i--){
+      const option=options.nth(i);
+      if(!await visible(option))continue;
+      const text=String(await option.innerText().catch(()=>'' )).replace(/\s+/g,' ').trim();
+      if(!wantedPattern.test(text))continue;
+      const clicked=await option.click({timeout:3500}).then(()=>true).catch(async()=>option.click({force:true,timeout:3500}).then(()=>true).catch(()=>false));
+      if(!clicked)continue;
+      await page.waitForTimeout(650);
+      const hotelCode=String(await code.inputValue().catch(()=>'' )).trim();
+      const destinationId=String(await destination.inputValue().catch(()=>'' )).trim();
+      const visualValue=String(await visual.inputValue().catch(()=>'' )).trim();
+      console.log(`[cordial] Selección real del hotel: visual=${visualValue||'—'} · destination_id=${destinationId||'—'} · hotel_codes=${hotelCode||'—'}`);
+      if(hotelCode){
+        // El elemento de hotel contiene actualmente el destination_id en su modelo interno.
+        // Si el listener rellenó hotel_codes pero no el hidden destino, recuperamos solo ese ID.
+        if(!destinationId){
+          const derived=await deriveHiddenFromRenderedOption(page,wantedPattern,'destination');
+          if(derived.value)await forceControlValue(destination,derived.value).catch(()=>false);
+        }
+        const finalDestination=String(await destination.inputValue().catch(()=>'' )).trim();
+        if(finalDestination)return true;
+      }
+    }
+
+    // Algunos widgets no exponen una opción clicable pero sí aceptan teclado.
+    await visual.press('ArrowDown').catch(()=>{});
+    await page.waitForTimeout(120);
+    await visual.press('Enter').catch(()=>{});
+    await page.waitForTimeout(650);
+    const hotelCode=String(await code.inputValue().catch(()=>'' )).trim();
+    let destinationId=String(await destination.inputValue().catch(()=>'' )).trim();
+    if(hotelCode&&!destinationId){
+      const derived=await deriveHiddenFromRenderedOption(page,wantedPattern,'destination');
+      if(derived.value){await forceControlValue(destination,derived.value).catch(()=>false);destinationId=String(await destination.inputValue().catch(()=>'' )).trim();}
+    }
+    if(hotelCode&&destinationId){
+      console.log(`[cordial] Selección real del hotel mediante teclado: visual=${String(await visual.inputValue().catch(()=>'' )).trim()||'—'} · destination_id=${destinationId} · hotel_codes=${hotelCode}`);
+      return true;
+    }
+  }catch(error){console.log(`[cordial] No se pudo completar la selección interactiva del hotel: ${error?.message||String(error)}`);}
+  return false;
+}
 async function deriveHiddenFromRenderedOption(page,pattern,kind){
   const info=await optionDiagnostics(page,pattern);
   const preferred=kind==='destination'
@@ -84,13 +146,29 @@ async function chooseHotel(page,config){
   const visual=page.locator('input[placeholder*="destino" i],input[placeholder*="hotel" i]').first();
   const before={code:await code.inputValue().catch(()=>''),destination:await destination.inputValue().catch(()=>'' )};
 
+  // Primero intentamos una selección real mediante el autocomplete, porque ese clic ejecuta
+  // los listeners internos de BeCordial y prepara más estado que los hidden por sí solos.
+  const selectedThroughUi=await selectHotelThroughUi(page,wanted).catch(()=>false);
+  if(selectedThroughUi){
+    const currentCode=String(await code.inputValue().catch(()=>'' )).trim();
+    const currentDestination=String(await destination.inputValue().catch(()=>'' )).trim();
+    const visualValue=String(await visual.inputValue().catch(()=>'' )).trim();
+    console.log(`[cordial] Hotel preparado mediante interfaz: code=${currentCode||'—'} · destination_id=${currentDestination||'—'} · visual=${visualValue||'—'}`);
+    const bookingForm=code.locator('xpath=ancestor::form[1]');
+    if(await bookingForm.count().catch(()=>0)){
+      await bookingForm.evaluate((f,data)=>{f.setAttribute('data-mfe-hotel-code',data.hotelCode);f.setAttribute('data-mfe-destination-id',data.destinationId);},{hotelCode:currentCode,destinationId:currentDestination}).catch(()=>{});
+    }
+    return Boolean(currentCode&&currentDestination);
+  }
+  console.log('[cordial] El autocomplete no confirmó una selección real; usando compatibilidad por hidden como respaldo.');
+
   // En la página específica del hotel, BeCordial precarga hotel_codes=AGUEDA pero deja
   // destination_id vacío. El servidor devuelve de nuevo el buscador si se envía así.
   // Por eso seleccionamos primero el destino y después el hotel usando el mismo autocomplete
   // que utiliza un usuario real, y verificamos los hidden antes de lanzar la búsqueda.
   let destinationSelected=false,hotelSelected=false;
 
-  // v2.1.96: el diagnóstico real de BeCordial mostró que el selector ya deja en el DOM
+  // v2.1.95: el diagnóstico real de BeCordial mostró que el selector ya deja en el DOM
   // nodos ocultos seleccionados con destination_id (p. ej. el destino y el hotel), aunque
   // el input hidden destination_id siga vacío. Recuperamos ese identificador del propio DOM
   // antes de intentar manipular visualmente el autocomplete. No se hardcodea ningún ID.
@@ -411,7 +489,7 @@ async function submitSearch(page){
     if(initialState.invalid?.length)console.log(`[cordial] Validación HTML: ${JSON.stringify(initialState.invalid)}`);
   }
 
-  // v2.1.96: el JS de BeCordial vacía hotel_codes justo al enviar. Interceptamos únicamente
+  // v2.1.97: el JS de BeCordial vacía hotel_codes justo al enviar. Interceptamos únicamente
   // el POST real y reponemos los dos campos críticos, manteniendo cookies, CSRF y listeners.
   const removeGuard=await installCriticalPostGuard(page,critical);
   try{
