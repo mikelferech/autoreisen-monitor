@@ -1,4 +1,4 @@
-// MFE_CORDIAL_AUTOMATION_VERSION: 2.1.98
+// MFE_CORDIAL_AUTOMATION_VERSION: 2.1.99
 import {isoNow,snapshot,acceptCookies} from './lib.mjs';
 
 const normalize=value=>String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/\s+/g,' ').trim();
@@ -403,8 +403,28 @@ async function setAdults(page,config){
 }
 async function bookingResultReady(page){
   if(/\/booking\/process\/room/i.test(page.url()))return true;
-  const result=page.getByText(/Tarifa Club Cordial|Tarifa Estándar|Classic Duplex/i).first();
-  return visible(result);
+
+  // El motor de BeCordial puede mantener la URL en /booking/process/ aunque ya haya
+  // renderizado las habitaciones. En las ejecuciones reales v2.1.98 se observan varios
+  // botones visibles "Reservar" tras el submit nativo, pero la comprobación antigua
+  // seguía interpretándolo como formulario fallido. Detectamos también esa firma real.
+  const resultText=page.getByText(/Tarifa Club Cordial|Tarifa Estándar|Classic Duplex|Solo alojamiento|Desayuno/i);
+  const resultCount=await resultText.count().catch(()=>0);
+  for(let i=0;i<Math.min(resultCount,12);i++){if(await visible(resultText.nth(i)))return true;}
+
+  const reserveButtons=page.getByRole('button',{name:/^reservar$/i});
+  const count=await reserveButtons.count().catch(()=>0);
+  let visibleReserve=0;
+  for(let i=0;i<Math.min(count,30);i++){if(await visible(reserveButtons.nth(i)))visibleReserve++;}
+  if(visibleReserve>=2){
+    const body=await page.locator('body').innerText().catch(()=> '');
+    const hasBookingContent=/€|SOLO ALOJAMIENTO|DESAYUNO|Classic|Duplex|Deluxe|Ocean|Tarifa/i.test(body);
+    if(hasBookingContent){
+      console.log(`[cordial] Resultados detectados en /booking/process/ por ${visibleReserve} botones Reservar visibles.`);
+      return true;
+    }
+  }
+  return false;
 }
 async function waitForBookingResult(page,timeout=45000){
   const started=Date.now();
@@ -579,7 +599,16 @@ async function submitSearch(page){
   }finally{await removeGuard();}
 }
 async function selectClubTab(page){
-  const tab=page.getByText(/Tarifa Club Cordial/i).first();if(await visible(tab)){await tab.click().catch(()=>{});await page.waitForTimeout(800);return true;}return false;
+  const tabs=page.getByText(/Tarifa Club Cordial/i);
+  const count=await tabs.count().catch(()=>0);
+  for(let i=0;i<Math.min(count,12);i++){
+    const tab=tabs.nth(i);
+    if(!await visible(tab))continue;
+    await tab.click().catch(()=>{});
+    await page.waitForTimeout(800);
+    return true;
+  }
+  return false;
 }
 function isBoard(line){return /^(SOLO ALOJAMIENTO|DESAYUNO|MEDIA PENSI[ÓO]N|PENSI[ÓO]N COMPLETA|TODO INCLUIDO|ALOJAMIENTO Y DESAYUNO)$/i.test(String(line).trim());}
 function isRate(line){return /^(Club Cordial\s*-|Tarifa Est[aá]ndar|Oferta .*Online|Reserva Online)/i.test(String(line).trim());}
@@ -637,4 +666,4 @@ export async function monitorCordial(browser,config={}){
   }finally{await context.close();}
 }
 
-export const __cordialTest={parseCordialText,targetMatches,normalize,fillDateInputs,forceControlValue,syncVisibleDateRange,submitSearch,formState,stabilizeBookingControls};
+export const __cordialTest={parseCordialText,targetMatches,normalize,fillDateInputs,forceControlValue,syncVisibleDateRange,submitSearch,formState,stabilizeBookingControls,bookingResultReady};
