@@ -1,4 +1,4 @@
-// MFE_CORDIAL_AUTOMATION_VERSION: 2.1.99
+// MFE_CORDIAL_AUTOMATION_VERSION: 2.2.00
 import {isoNow,snapshot,acceptCookies} from './lib.mjs';
 
 const normalize=value=>String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/\s+/g,' ').trim();
@@ -637,6 +637,96 @@ export function parseCordialText(text,headingTexts=[],config={}){
   // Quita duplicados que algunos layouts responsive repiten.
   const map=new Map();for(const row of out){const key=[normalize(row.roomType),normalize(row.rateName),normalize(row.board),row.price].join('|');if(!map.has(key))map.set(key,row);}return [...map.values()];
 }
+
+function contextLines(text){return String(text||'').split(/\n+/).map(x=>x.replace(/\s+/g,' ').trim()).filter(Boolean);}
+function extractRateLine(text){
+  const lines=contextLines(text);
+  for(const line of lines){if(isRate(line))return line;}
+  const flat=String(text||'').replace(/\s+/g,' ').trim();
+  const m=flat.match(/Club Cordial\s*-\s*(?:Oferta Prepago Online|Reserva Online)/i);
+  if(m)return m[0];
+  return /Tarifa Club Cordial/i.test(flat)?'Tarifa Club Cordial':'';
+}
+function extractCancellation(text){return contextLines(text).find(isCancellation)||'';}
+function extractAvailability(text){return contextLines(text).find(line=>/queda\s+\d+\s+habitaci[oó]n|agotad|no disponible|sold out/i.test(line))||'';}
+function roomFromContext(context,headings){
+  const headingSet=new Set((headings||[]).map(normalize));
+  const candidates=[];
+  for(const ancestor of context.ancestors||[])for(const h of ancestor.headings||[])candidates.push(h);
+  for(const h of [...candidates].reverse()){if(looksRoom(h,headingSet))return h;}
+  for(const h of [...(context.precedingHeadings||[])].reverse()){if(looksRoom(h,headingSet))return h;}
+  for(const ancestor of [...(context.ancestors||[])].reverse()){
+    for(const line of contextLines(ancestor.text)){if(looksRoom(line,headingSet))return line;}
+  }
+  return '';
+}
+export function parseReserveContext(context,headingTexts=[],config={}){
+  const ancestors=Array.isArray(context?.ancestors)?context.ancestors:[];
+  let tariffIndex=-1,board='',money=[];
+  for(let i=0;i<ancestors.length;i++){
+    const lines=contextLines(ancestors[i].text);
+    const foundBoard=lines.find(isBoard)||'';
+    const foundMoney=eur(ancestors[i].text);
+    if(foundBoard&&foundMoney.length){tariffIndex=i;board=foundBoard;money=foundMoney;break;}
+  }
+  if(tariffIndex<0)return null;
+  let rate='',cancellation='',availability='';
+  for(let i=tariffIndex;i<ancestors.length;i++){
+    const text=ancestors[i].text||'';
+    if(!rate)rate=extractRateLine(text);
+    if(!cancellation)cancellation=extractCancellation(text);
+    if(!availability)availability=extractAvailability(text);
+    if(rate&&cancellation)break;
+  }
+  const room=roomFromContext(context,headingTexts);
+  if(!room)return null;
+  const price=money[money.length-1],crossedPrice=money.length>1?money[0]:0;
+  if(!Number.isFinite(price)||price<=0)return null;
+  const row={roomType:room,rateName:rate||'Tarifa Club Cordial',cancellation,board:String(board).toUpperCase(),price,crossedPrice,availability:availability||'Disponible'};
+  row.target=targetMatches(row,config);
+  return row;
+}
+function dedupeOptions(rows=[]){
+  const map=new Map();
+  for(const row of rows.filter(Boolean)){
+    const key=[normalize(row.roomType),normalize(row.rateName),normalize(row.board),Number(row.price)||0].join('|');
+    if(!map.has(key)||row.target)map.set(key,row);
+  }
+  return [...map.values()];
+}
+async function reserveContexts(page){
+  return page.locator('button,input[type="button"],input[type="submit"],a').evaluateAll(nodes=>{
+    const visible=el=>!!(el.offsetWidth||el.offsetHeight||el.getClientRects().length);
+    const label=el=>String(el.innerText||el.value||el.getAttribute('aria-label')||'').replace(/\s+/g,' ').trim();
+    const reserve=nodes.filter(el=>visible(el)&&/^reservar$/i.test(label(el))).slice(0,60);
+    const allHeadings=[...document.querySelectorAll('h1,h2,h3,h4,h5,h6')].filter(visible);
+    return reserve.map((button,index)=>{
+      const ancestors=[];let node=button.parentElement;
+      for(let depth=0;node&&depth<11;depth++,node=node.parentElement){
+        const text=String(node.innerText||'').trim();
+        const headings=[...node.querySelectorAll(':scope > h1,:scope > h2,:scope > h3,:scope > h4,:scope > h5,:scope > h6,h1,h2,h3,h4,h5,h6')]
+          .filter(visible).slice(0,8).map(h=>String(h.innerText||'').replace(/\s+/g,' ').trim()).filter(Boolean);
+        ancestors.push({tag:node.tagName,id:node.id||'',className:String(node.className||'').slice(0,180),text:text.slice(0,5000),headings});
+        if(text.length>12000)break;
+      }
+      const precedingHeadings=allHeadings.filter(h=>(h.compareDocumentPosition(button)&Node.DOCUMENT_POSITION_FOLLOWING)!==0)
+        .slice(-12).map(h=>String(h.innerText||'').replace(/\s+/g,' ').trim()).filter(Boolean);
+      return {index,label:label(button),ancestors,precedingHeadings};
+    });
+  }).catch(()=>[]);
+}
+async function parseCordialDom(page,headingTexts=[],config={}){
+  const contexts=await reserveContexts(page);
+  const rows=dedupeOptions(contexts.map(ctx=>parseReserveContext(ctx,headingTexts,config)));
+  console.log(`[cordial] Parser DOM: ${contexts.length} botones Reservar analizados · ${rows.length} tarifas interpretadas.`);
+  if(rows.length){
+    for(const row of rows.slice(0,24))console.log(`[cordial] Tarifa: ${row.roomType} · ${row.rateName} · ${row.board} · ${row.price.toFixed(2)} €${row.target?' · OBJETIVO':''}`);
+  }else if(contexts.length){
+    const summary=contexts.slice(0,8).map(ctx=>({index:ctx.index,precedingHeadings:ctx.precedingHeadings.slice(-4),ancestors:ctx.ancestors.slice(0,5).map(a=>({tag:a.tag,id:a.id,className:a.className,text:String(a.text||'').replace(/\s+/g,' ').slice(0,700)}))}));
+    console.log(`[cordial] Contextos Reservar no interpretados: ${JSON.stringify(summary)}`);
+  }
+  return {rows,contexts};
+}
 async function diagnostic(page){
   const inputs=await page.locator('input,select').evaluateAll(nodes=>nodes.slice(0,50).map(el=>({tag:el.tagName,name:el.getAttribute('name')||'',type:el.getAttribute('type')||'',placeholder:el.getAttribute('placeholder')||'',value:el.value||''}))).catch(()=>[]);
   const forms=await page.locator('form').evaluateAll(nodes=>nodes.slice(0,12).map(f=>({action:f.action||'',method:(f.method||'get').toUpperCase(),id:f.id||'',name:f.getAttribute('name')||''}))).catch(()=>[]);
@@ -655,15 +745,22 @@ export async function monitorCordial(browser,config={}){
       if(!datesOk){const d=await diagnostic(page);throw new Error(`No se localizaron de forma fiable los campos de fechas del formulario público de Cordial. ${d}`);}
       const submitted=await submitSearch(page);if(!submitted){const d=await diagnostic(page);throw new Error(`No se pudo enviar el formulario de reserva de Cordial. ${d}`);}
     }
-    await page.waitForTimeout(2500);await selectClubTab(page).catch(()=>false);
+    await page.waitForTimeout(2500);await selectClubTab(page).catch(()=>false);await page.waitForTimeout(650);
+    // Guardamos la pantalla REAL de resultados antes de interpretar nada. Si el lector vuelve
+    // a fallar, el artefacto contendrá por fin el DOM de las tarifas y no solo el buscador.
+    await snapshot(page,'cordial-resultados-bruto').catch(()=>{});
     const body=await page.locator('body').innerText().catch(()=> '');
     if(/captcha|verify you are human|comprobando su navegador|access denied/i.test(body))throw new Error('Cordial ha mostrado una verificación anti-bot durante la consulta.');
-    const headings=await page.locator('h1,h2,h3,h4,h5').allTextContents().catch(()=>[]);const options=parseCordialText(body,headings,config);
-    if(!options.length){await snapshot(page,'cordial-sin-opciones');const d=await diagnostic(page);throw new Error(`Cordial abrió el motor de reservas, pero no se pudieron interpretar tarifas. ${d}`);}
+    const headings=await page.locator('h1,h2,h3,h4,h5,h6').allTextContents().catch(()=>[]);
+    const domParsed=await parseCordialDom(page,headings,config);
+    const textOptions=parseCordialText(body,headings,config);
+    const options=dedupeOptions([...domParsed.rows,...textOptions]);
+    console.log(`[cordial] Parser combinado: DOM=${domParsed.rows.length} · texto=${textOptions.length} · final=${options.length}.`);
+    if(!options.length){await snapshot(page,'cordial-sin-opciones');const d=await diagnostic(page);throw new Error(`Cordial abrió el motor de reservas, pero no se pudieron interpretar tarifas. Se analizaron ${domParsed.contexts.length} botones Reservar. ${d}`);}
     const target=options.find(row=>row.target)||null;
     await snapshot(page,'cordial-resultados');
     return {ok:true,status:'ok',source:'BeCordial · navegador real · GitHub Actions + Playwright',checkedAt:isoNow(),hotel:config.hotel||'Cordial Santa Águeda & Perchel Beach Club',checkIn:config.checkIn,checkOut:config.checkOut,adults:Number(config.adults)||2,options,target,targetPrice:Number(target?.price)||0,availability:target?'Disponible':'Objetivo no encontrado',resultUrl:page.url()};
   }finally{await context.close();}
 }
 
-export const __cordialTest={parseCordialText,targetMatches,normalize,fillDateInputs,forceControlValue,syncVisibleDateRange,submitSearch,formState,stabilizeBookingControls,bookingResultReady};
+export const __cordialTest={parseCordialText,parseReserveContext,targetMatches,normalize,fillDateInputs,forceControlValue,syncVisibleDateRange,submitSearch,formState,stabilizeBookingControls,bookingResultReady};
