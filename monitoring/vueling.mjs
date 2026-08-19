@@ -1,4 +1,4 @@
-// MFE_VUELING_AUTOMATION_VERSION: 1.0.13
+// MFE_VUELING_AUTOMATION_VERSION: 1.0.14
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
@@ -489,32 +489,58 @@ async function skipSeats(page){
   if(await luggagePageActive(page))return true;
   throw new Error('Vueling no avanzó desde asientos hasta equipaje.');
 }
+async function underseatRowSelected(row){
+  return row.evaluate(el=>{
+    const cls=String(el.className||'');
+    return cls.includes('gcbg-option-row--selected')||
+      Boolean(el.querySelector('mat-radio-button.mat-mdc-radio-checked'))||
+      Boolean(el.querySelector('input[type="radio"]:checked'))||
+      Boolean(el.querySelector('.gcbg-option-title .ds-icon-check-solid'));
+  }).catch(()=>false);
+}
+async function clickUnderseatRow(row,label='trayecto'){
+  if(await underseatRowSelected(row))return true;
+  const targets=[
+    row.locator('.gcbg-option-row__right .mdc-radio-touch-target').first(),
+    row.locator('.gcbg-option-row__right .mdc-radio').first(),
+    row.locator('.gcbg-option-row__right mat-radio-button').first(),
+    row.locator('.gcbg-option-row__right').first(),
+    row
+  ];
+  for(const target of targets){
+    if(await target.count().catch(()=>0)){
+      await target.scrollIntoViewIfNeeded().catch(()=>{});
+      await target.click({force:true,timeout:5000}).catch(()=>{});
+      const deadline=Date.now()+4500;
+      while(Date.now()<deadline){if(await underseatRowSelected(row))return true;await pause(row.page(),160);}
+    }
+  }
+  // Último fallback: ejecutar el click nativo sobre el control visible. En la versión
+  // Angular observada el input está oculto, pero el touch target sí representa el gesto real.
+  await row.evaluate(el=>{
+    const target=el.querySelector('.gcbg-option-row__right .mdc-radio-touch-target')||
+      el.querySelector('.gcbg-option-row__right .mdc-radio')||
+      el.querySelector('.gcbg-option-row__right mat-radio-button')||
+      el.querySelector('.gcbg-option-row__right')||el;
+    target?.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));
+    target?.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));
+    target?.click?.();
+  }).catch(()=>{});
+  const deadline=Date.now()+5000;
+  while(Date.now()<deadline){if(await underseatRowSelected(row))return true;await pause(row.page(),180);}
+  throw new Error(`No se pudo seleccionar la pieza bajo el asiento para ${label}.`);
+}
 async function selectUnderseatInJourney(page,journey,label='trayecto'){
-  // IMPORTANTE: no buscamos el texto genérico «1 pieza de equipaje de mano»,
-  // porque ese mismo texto también aparece como descripción dentro de la opción
-  // de 2 piezas. Seleccionamos únicamente el TÍTULO exacto de la tarjeta gratuita.
-  // El input nativo de Angular Material está deliberadamente oculto, por lo que
-  // isVisible(input) devuelve false aunque el radio circular sí esté en pantalla.
-  // Por eso trabajamos con el input mediante check({force:true}) y, como fallback,
-  // pulsamos el mat-radio-button / la fila completa.
+  // El texto «1 pieza de equipaje de mano» también aparece dentro de la descripción
+  // de la opción de 2 piezas. Por eso se localiza exclusivamente el TÍTULO exacto.
+  // Vueling usa Angular Material: el input radio nativo está oculto y no siempre
+  // responde a check({force:true}). La selección se confirma por el estado visual
+  // real de la fila (gcbg-option-row--selected / mat-mdc-radio-checked).
   const title=journey.locator('.gcbg-option-title').filter({hasText:/^\s*1\s+pieza\s+de\s+equipaje\s+de\s+mano\s*$/i}).first();
   await title.waitFor({state:'attached',timeout:18000});
   const row=title.locator('xpath=ancestor::div[contains(@class,"gcbg-option-row")][1]');
   await row.waitFor({state:'attached',timeout:12000});
-  const radio=row.locator('input[type="radio"]').first();
-  if(await radio.count()===0)throw new Error(`No aparece el selector de «1 pieza bajo el asiento» para ${label}.`);
-  if(!(await radio.isChecked().catch(()=>false))){
-    let selected=false;
-    try{await radio.check({force:true,timeout:6000});selected=await radio.isChecked().catch(()=>false);}catch{}
-    if(!selected){
-      const matRadio=row.locator('mat-radio-button').first();
-      if(await matRadio.count())await matRadio.click({force:true,timeout:6000}).catch(()=>{});
-      else await row.click({force:true,timeout:6000}).catch(()=>{});
-    }
-    const deadline=Date.now()+7000;
-    while(Date.now()<deadline){if(await radio.isChecked().catch(()=>false))break;await pause(page,180);}
-  }
-  if(!(await radio.isChecked().catch(()=>false)))throw new Error(`No se pudo seleccionar la pieza bajo el asiento para ${label}.`);
+  if(!(await clickUnderseatRow(row,label)))throw new Error(`No se pudo seleccionar la pieza bajo el asiento para ${label}.`);
 }
 async function selectUnderseatForPassengerCard(page,card,passengerLabel){
   const header=card.locator('mat-expansion-panel-header').first();
