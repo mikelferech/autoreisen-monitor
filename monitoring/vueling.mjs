@@ -1,4 +1,4 @@
-// MFE_VUELING_AUTOMATION_VERSION: 1.0.6
+// MFE_VUELING_AUTOMATION_VERSION: 1.0.7
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
@@ -280,25 +280,68 @@ async function fillPassengerPanel(page,index,firstName,lastName){
   await fillPanelField(page,panel,/^Apellidos?\*?$/i,lastName,{label:`apellidos del pasajero ${index+1}`});
   await snapshot(page,`05a-pasajero-${index+1}`);
 }
+function normalizeAutocompleteValue(value,label=''){
+  const raw=String(value??'').normalize('NFKC').trim();
+  if(/prefijo/i.test(label))return raw.replace(/[^0-9+]/g,'');
+  return raw.toLocaleLowerCase('es').replace(/\s+/g,' ');
+}
+function autocompleteValueMatches(current,wanted,label=''){
+  const a=normalizeAutocompleteValue(current,label),b=normalizeAutocompleteValue(wanted,label);
+  if(!a||!b)return false;
+  if(/prefijo/i.test(label))return a.replace(/\D/g,'')===b.replace(/\D/g,'');
+  return a===b;
+}
 async function chooseAutocompleteValue(page,panel,fieldPattern,value,label){
   await ensureGuestAccessClosed(page);
   const input=panelField(panel,fieldPattern);
   if(!(await isVisible(input)))throw new Error(`No se encontró ${label}.`);
+
+  // Vueling completa automáticamente el prefijo cuando se selecciona el país. En ese caso el
+  // input ya contiene +34 aunque no exista ninguna opción desplegada. No debemos borrar un valor
+  // válido ni exigir que aparezca de nuevo el autocomplete.
+  const initialValue=await input.inputValue().catch(()=>'');
+  if(autocompleteValueMatches(initialValue,value,label)){
+    console.log(`[vueling] ${label} ya seleccionado automáticamente: ${initialValue}.`);
+    return true;
+  }
+
   await input.scrollIntoViewIfNeeded().catch(()=>{});
   await input.click({timeout:8000}).catch(()=>input.click({force:true,timeout:4000}));
   await pause(page,350);
   await ensureGuestAccessClosed(page);
-  const exact=new RegExp(`^${String(value).replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}$`,'i');
+
+  // El clic puede hacer que Angular materialice/restaure el valor previamente seleccionado.
+  const afterClick=await input.inputValue().catch(()=>'');
+  if(autocompleteValueMatches(afterClick,value,label)){
+    console.log(`[vueling] ${label} confirmado tras abrir el campo: ${afterClick}.`);
+    return true;
+  }
+
+  const escaped=String(value).replace(/[.*+?^${}()|[\]\\]/g,'\$&');
+  const exact=new RegExp(`^${escaped}$`,'i');
   const option=page.getByRole('option',{name:exact}).first();
   if(await isVisible(option)){await option.click({timeout:8000}).catch(()=>option.click({force:true,timeout:4000}));await pause(page,250);return true;}
   const text=page.getByText(exact).last();
   if(await isVisible(text)){await text.click({timeout:8000}).catch(()=>text.click({force:true,timeout:4000}));await pause(page,250);return true;}
+
   // Algunos autocompletados aceptan escribir el valor antes de seleccionar.
-  await input.fill(String(value),{timeout:5000}).catch(()=>{});await pause(page,400);
-  const retry=page.getByRole('option',{name:new RegExp(String(value).replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'i')}).first();
+  await input.fill(String(value),{timeout:5000}).catch(()=>{});await pause(page,450);
+  const filled=await input.inputValue().catch(()=>'');
+  const ariaInvalid=await input.getAttribute('aria-invalid').catch(()=>null);
+  if(autocompleteValueMatches(filled,value,label)&&ariaInvalid!=='true'){
+    console.log(`[vueling] ${label} aceptado directamente por el campo: ${filled}.`);
+    return true;
+  }
+  const retry=page.getByRole('option',{name:new RegExp(escaped,'i')}).first();
   if(await isVisible(retry)){await retry.click({force:true});await pause(page,250);return true;}
-  throw new Error(`No apareció la opción ${label}: ${value}.`);
+
+  // Última comprobación: algunos mat-autocomplete cierran su lista al validar y dejan el valor en
+  // el input sin una opción visible en el DOM.
+  const finalValue=await input.inputValue().catch(()=>'');
+  if(autocompleteValueMatches(finalValue,value,label))return true;
+  throw new Error(`No apareció la opción ${label}: ${value}. Valor actual: ${finalValue||'vacío'}.`);
 }
+
 async function fillContactAndPassengers(page){
   await ensureGuestAccessClosed(page);
   const adults=Math.max(1,Number(config.adults)||1);
