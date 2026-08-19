@@ -1,4 +1,4 @@
-// MFE_VUELING_AUTOMATION_VERSION: 1.0.4
+// MFE_VUELING_AUTOMATION_VERSION: 1.0.5
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
@@ -173,7 +173,46 @@ async function selectFlyLight(page){
   if(!(await clickFirst(page,[title],{required:true,label:'tarifa FLY LIGHT'})))throw new Error('No se pudo seleccionar FLY LIGHT.');
   console.log('[vueling] Tarifa FLY LIGHT seleccionada mediante la tarjeta.');
 }
+async function guestAccessOverlayActive(page){
+  const guestText=page.getByText(/contin[uú]a?r? como invitado|seguir como invitado|como invitado\/a/i).first();
+  if(await isVisible(guestText))return true;
+  const guestInOverlay=page.locator('.cdk-overlay-container').getByText(/invitado/i).first();
+  return await isVisible(guestInOverlay);
+}
+async function clickContinueAsGuest(page){
+  const pattern=/contin[uú]a?r? como invitado|seguir como invitado|como invitado\/a/i;
+  const roleButton=page.getByRole('button',{name:pattern}).first();
+  const plainButton=page.locator('button').filter({hasText:pattern}).first();
+  const guestText=page.getByText(pattern).first();
+  let target=null;
+  if(await isVisible(roleButton))target=roleButton;
+  else if(await isVisible(plainButton))target=plainButton;
+  else if(await isVisible(guestText)){
+    const ancestor=guestText.locator('xpath=ancestor::*[self::button or self::a or @role="button"][1]');
+    target=await isVisible(ancestor)?ancestor:guestText;
+  }
+  if(!target)return false;
+  await target.scrollIntoViewIfNeeded().catch(()=>{});
+  let clicked=false;
+  try{await target.click({timeout:8000});clicked=true;}catch{}
+  if(!clicked){try{await target.click({force:true,timeout:5000});clicked=true;}catch{}}
+  if(!clicked&&await isVisible(guestText)){
+    clicked=await guestText.evaluate(el=>{
+      const clickable=el.closest('button,a,[role="button"],c-lib-button,.text-slim-button');
+      try{(clickable||el).click();return true;}catch{return false;}
+    }).catch(()=>false);
+  }
+  if(!clicked)return false;
+  console.log('[vueling] Continuar como invitado pulsado; esperando a que cierre el overlay de acceso.');
+  await guestText.waitFor({state:'hidden',timeout:15000}).catch(()=>{});
+  await page.locator('.cdk-overlay-backdrop.cdk-overlay-backdrop-showing').first().waitFor({state:'hidden',timeout:15000}).catch(()=>{});
+  await pause(page,700);
+  return true;
+}
 async function contactFormReady(page){
+  // En Vueling el formulario puede estar ya renderizado por debajo del modal de acceso. No lo
+  // consideramos listo mientras el overlay "Continúa como invitado/a" siga interceptando clics.
+  if(await guestAccessOverlayActive(page))return false;
   const first=page.locator('input[placeholder^="Nombre"]:not([placeholder*="apellidos" i])').first();
   if(await isVisible(first))return true;
   const heading=page.getByText(/Persona de contacto|¿Quién viajará\?|Datos de contacto/i).first();
@@ -190,15 +229,14 @@ async function continueFareAndReachContact(page,{timeoutMs=90000}={}){
   await pause(page,900);await snapshot(page,'04b-despues-continuar-tarifa');
   const deadline=Date.now()+timeoutMs;let guestClicked=false,lastLog=0;
   while(Date.now()<deadline){
-    if(await contactFormReady(page)){console.log('[vueling] Formulario de contacto detectado.');return;}
-    const guest=page.getByRole('button',{name:/continuar como invitado|seguir como invitado|como invitado/i}).first();
-    const guestText=page.getByText(/continuar como invitado|seguir como invitado/i).first();
-    const target=await isVisible(guest)?guest:(await isVisible(guestText)?guestText:null);
-    if(target&&!guestClicked){
-      guestClicked=true;console.log('[vueling] Pantalla de acceso detectada; continuando como invitado.');
-      await target.scrollIntoViewIfNeeded().catch(()=>{});await target.click({force:true,timeout:8000}).catch(()=>{});await pause(page,900);await snapshot(page,'04c-continuar-como-invitado');
-      continue;
+    // Primero resolvemos el modal de acceso. El formulario de contacto puede estar visible por
+    // debajo y Playwright lo detecta como visible aunque el backdrop siga interceptando eventos.
+    if(await guestAccessOverlayActive(page)){
+      console.log('[vueling] Pantalla de acceso detectada; continuando como invitado.');
+      const clicked=await clickContinueAsGuest(page);
+      if(clicked){guestClicked=true;await snapshot(page,'04c-continuar-como-invitado');continue;}
     }
+    if(await contactFormReady(page)){console.log('[vueling] Formulario de contacto detectado y sin overlay bloqueando.');return;}
     if(Date.now()-lastLog>15000){lastLog=Date.now();console.log(`[vueling] Esperando formulario de contacto (${Math.round((timeoutMs-(deadline-Date.now()))/1000)} s). URL: ${page.url()}`);}
     await page.waitForTimeout(600);
   }
