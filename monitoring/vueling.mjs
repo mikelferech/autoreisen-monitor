@@ -1,4 +1,4 @@
-// MFE_VUELING_AUTOMATION_VERSION: 1.0.9
+// MFE_VUELING_AUTOMATION_VERSION: 1.0.10
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
@@ -460,13 +460,16 @@ async function setSwitchNearText(page,pattern,wanted,{index=0,label='interruptor
 async function seatPageActive(page){return /\/booking\/seats/i.test(String(page.url()||''))||await page.getByText(/¿DÓNDE QUIERES SENTARTE\?|Continuar sin elegir asientos/i).first().isVisible().catch(()=>false);}
 async function luggagePageActive(page){return /\/booking\/services/i.test(String(page.url()||''))||await page.getByText(/SELECCIONA TU EQUIPAJE|EQUIPAJE DE MANO/i).first().isVisible().catch(()=>false);}
 async function dismissSeatUpsell(page){
-  const dialog=page.locator('mat-dialog-container,.cdk-overlay-pane,[role="dialog"]').filter({hasText:/¿Y SI ELIGES TU ASIENTO AHORA\?|QUIERO ELEGIRLO AHORA/i}).last();
+  const dialog=page.locator('mat-dialog-container,.cdk-overlay-pane,[role="dialog"]').filter({hasText:/¿NO VAS A ESCOGER ASIENTO\?|¿Y SI ELIGES TU ASIENTO AHORA\?|ESCOGER ASIENTOS|CONTINUAR SIN SELECCIONAR/i}).last();
   if(!(await isVisible(dialog)))return false;
-  const skip=dialog.getByRole('button',{name:/CONTINUAR SIN (?:ELEGIR )?ASIENTOS/i}).first();
+  let skip=dialog.getByRole('button',{name:/CONTINUAR SIN SELECCIONAR|CONTINUAR SIN (?:ELEGIR )?ASIENTOS/i}).last();
+  if(!(await isVisible(skip)))skip=dialog.getByText(/Continuar sin seleccionar/i).last();
   if(!(await isVisible(skip)))return false;
+  await skip.scrollIntoViewIfNeeded().catch(()=>{});
   await skip.click({timeout:10000}).catch(()=>skip.click({force:true,timeout:5000}));
+  await page.locator('.cdk-overlay-backdrop.cdk-overlay-backdrop-showing').waitFor({state:'hidden',timeout:12000}).catch(()=>{});
   await dialog.waitFor({state:'hidden',timeout:12000}).catch(()=>{});await pause(page,700);
-  console.log('[vueling] Confirmación de asientos rechazada.');return true;
+  console.log('[vueling] Modal «Continuar sin seleccionar» resuelto.');return true;
 }
 async function skipSeats(page){
   for(let attempt=0;attempt<3;attempt++){
@@ -474,8 +477,12 @@ async function skipSeats(page){
     if(!(await seatPageActive(page)))await page.getByText(/¿DÓNDE QUIERES SENTARTE\?|Continuar sin elegir asientos/i).first().waitFor({state:'visible',timeout:60000}).catch(()=>{});
     const skip=page.getByRole('button',{name:/CONTINUAR SIN (?:ELEGIR )?ASIENTOS/i}).last();
     if(!(await isVisible(skip)))throw new Error('No aparece «Continuar sin elegir asientos».');
-    await skip.scrollIntoViewIfNeeded().catch(()=>{});await skip.click({timeout:10000}).catch(()=>skip.click({force:true,timeout:5000}));await pause(page,600);
-    await dismissSeatUpsell(page);
+    await skip.scrollIntoViewIfNeeded().catch(()=>{});await skip.click({timeout:10000}).catch(()=>skip.click({force:true,timeout:5000}));await pause(page,500);
+    // Vueling abre un segundo modal: «¿no vas a escoger asiento?» con el enlace
+    // «Continuar sin seleccionar». Hay que resolverlo antes de esperar equipaje.
+    const modalDeadline=Date.now()+12000;let modalHandled=false;
+    while(Date.now()<modalDeadline){if(await dismissSeatUpsell(page)){modalHandled=true;break;}if(await luggagePageActive(page))return true;await pause(page,350);}
+    if(!modalHandled)await dismissSeatUpsell(page).catch(()=>false);
     const deadline=Date.now()+45000;
     while(Date.now()<deadline){if(await luggagePageActive(page)){console.log('[vueling] Asientos omitidos.');return true;}if(await seatPageActive(page)&&await page.getByRole('button',{name:/CONTINUAR SIN (?:ELEGIR )?ASIENTOS/i}).last().isVisible().catch(()=>false))break;await pause(page,700);}
   }
