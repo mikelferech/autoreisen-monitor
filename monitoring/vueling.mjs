@@ -1,4 +1,4 @@
-// MFE_VUELING_AUTOMATION_VERSION: 1.0.5
+// MFE_VUELING_AUTOMATION_VERSION: 1.0.6
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
@@ -211,10 +211,11 @@ async function clickContinueAsGuest(page){
 }
 async function contactFormReady(page){
   // En Vueling el formulario puede estar ya renderizado por debajo del modal de acceso. No lo
-  // consideramos listo mientras el overlay "Continúa como invitado/a" siga interceptando clics.
+  // consideramos listo mientras el overlay «Continúa como invitado/a» siga interceptando clics.
   if(await guestAccessOverlayActive(page))return false;
-  const first=page.locator('input[placeholder^="Nombre"]:not([placeholder*="apellidos" i])').first();
-  if(await isVisible(first))return true;
+  const passengerPanel=page.locator('vy-passenger-form-panel').first();
+  const contactPanel=page.locator('vy-contact-form-panel').first();
+  if(await isVisible(passengerPanel)&&await isVisible(contactPanel))return true;
   const heading=page.getByText(/Persona de contacto|¿Quién viajará\?|Datos de contacto/i).first();
   return await isVisible(heading);
 }
@@ -242,27 +243,118 @@ async function continueFareAndReachContact(page,{timeoutMs=90000}={}){
   }
   throw new Error(`Tras FLY LIGHT y CONTINUAR no apareció el formulario de contacto${guestClicked?' después de continuar como invitado':''}. URL: ${page.url()}`);
 }
-async function fillContactAndPassengers(page){
-  await fillFirst(page,[page.getByLabel(/^Nombre\*?$/i).first(),page.locator('input[placeholder^="Nombre"]:not([placeholder*="apellidos"])').first()],config.contactFirstName,{required:true,label:'Nombre de contacto'});
-  await fillFirst(page,[page.getByLabel(/^Apellidos?\*?$/i).first(),page.locator('input[placeholder^="Apellidos"]').first()],config.contactLastName,{required:true,label:'Apellidos de contacto'});
-  await fillFirst(page,[page.getByLabel(/Email/i),page.locator('input[type="email"]')],config.email,{required:true,label:'Email'});
-  const country=page.getByLabel(/País de residencia/i).first();if(await isVisible(country)){await country.click();await pause(page,300);await clickFirst(page,[page.getByRole('option',{name:new RegExp(config.country,'i')}),page.getByText(new RegExp(`^${config.country}$`,'i'))],{required:true,label:`país ${config.country}`});}
-  const prefix=page.getByLabel(/Prefijo/i).first();if(await isVisible(prefix)){await prefix.click();await pause(page,200);await clickFirst(page,[page.getByText(new RegExp(String(config.phonePrefix||'+34').replace('+','\\+')))],{});}
-  await fillFirst(page,[page.getByLabel(/Teléfono móvil|Móvil|Teléfono/i),page.locator('input[type="tel"]')],config.phone,{required:true,label:'Teléfono móvil'});
-  if(config.marketingConsent)await checkLabel(page,/Quiero recibir información y ofertas/i,true);else await checkLabel(page,/Quiero recibir información y ofertas/i,false);
-  await checkLabel(page,/política de privacidad|acepto.*condiciones|he leído.*privacidad/i,true);
-  // Rellena datos de viajeros adicionales si Vueling los solicita en esta misma pantalla.
-  const visibleNames=page.locator('input').filter({has:page.locator('xpath=..')});
-  const nameInputs=page.locator('input').filter({hasNot:page.locator('[type="hidden"]')});
-  const all=await nameInputs.count().catch(()=>0);let travellerIndex=0;
-  for(let i=0;i<all;i++){
-    const el=nameInputs.nth(i),ph=String(await el.getAttribute('placeholder').catch(()=>'')),val=await el.inputValue().catch(()=>''),type=String(await el.getAttribute('type').catch(()=>''));
-    if(val||type==='email'||type==='tel'||!/(^|\s)Nombre(\*|$)/i.test(ph))continue;
-    travellerIndex++;const first=travellerIndex===1?config.passenger1FirstName:config.passenger2FirstName||`Pasajero${travellerIndex}`;await el.fill(String(first||'Prueba'));
+async function ensureGuestAccessClosed(page,{required=false}={}){
+  if(!(await guestAccessOverlayActive(page)))return false;
+  console.log('[vueling] Modal de acceso detectado durante Datos; cerrando con «Continúa como invitado/a».');
+  const clicked=await clickContinueAsGuest(page);
+  if(!clicked&&required)throw new Error('Apareció el modal de acceso de Vueling y no se pudo pulsar «Continúa como invitado/a».');
+  if(clicked){
+    await page.getByText(/RESERVA MÁS RÁPIDO/i).first().waitFor({state:'hidden',timeout:20000}).catch(()=>{});
+    await page.locator('.cdk-overlay-backdrop.cdk-overlay-backdrop-showing').first().waitFor({state:'hidden',timeout:20000}).catch(()=>{});
+    await pause(page,500);
   }
-  const surnameInputs=page.locator('input[placeholder^="Apellidos"]');const sc=await surnameInputs.count().catch(()=>0);for(let i=1;i<sc;i++){const el=surnameInputs.nth(i);if(!(await el.inputValue().catch(()=>'')))await el.fill(i===1?String(config.passenger1LastName||'Kfkfr'):String(config.passenger2LastName||'Mfe'));}
-  await clickFirst(page,[page.getByRole('button',{name:/CONTINUAR|Continuar/i})],{required:true,label:'Continuar después de pasajeros'});
+  return clicked;
 }
+function panelField(panel,pattern,{type=''}={}){
+  const field=panel.locator('mat-form-field').filter({hasText:pattern}).first();
+  return type?field.locator(`input[type="${type}"]`).first():field.locator('input').first();
+}
+async function fillPanelField(page,panel,pattern,value,{required=true,label='campo',type=''}={}){
+  await ensureGuestAccessClosed(page);
+  const input=panelField(panel,pattern,{type});
+  if(await isVisible(input)){
+    await input.scrollIntoViewIfNeeded().catch(()=>{});
+    await input.fill(String(value),{timeout:10000});
+    await pause(page,250);
+    await ensureGuestAccessClosed(page);
+    return true;
+  }
+  if(required)throw new Error(`No se encontró ${label}.`);
+  return false;
+}
+async function fillPassengerPanel(page,index,firstName,lastName){
+  const panels=page.locator('vy-passenger-form-panel');
+  const panel=panels.nth(index);
+  if(!(await isVisible(panel)))throw new Error(`No aparece el formulario del pasajero ${index+1}.`);
+  await fillPanelField(page,panel,/^Nombre\*?$/i,firstName,{label:`nombre del pasajero ${index+1}`});
+  await fillPanelField(page,panel,/^Apellidos?\*?$/i,lastName,{label:`apellidos del pasajero ${index+1}`});
+  await snapshot(page,`05a-pasajero-${index+1}`);
+}
+async function chooseAutocompleteValue(page,panel,fieldPattern,value,label){
+  await ensureGuestAccessClosed(page);
+  const input=panelField(panel,fieldPattern);
+  if(!(await isVisible(input)))throw new Error(`No se encontró ${label}.`);
+  await input.scrollIntoViewIfNeeded().catch(()=>{});
+  await input.click({timeout:8000}).catch(()=>input.click({force:true,timeout:4000}));
+  await pause(page,350);
+  await ensureGuestAccessClosed(page);
+  const exact=new RegExp(`^${String(value).replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}$`,'i');
+  const option=page.getByRole('option',{name:exact}).first();
+  if(await isVisible(option)){await option.click({timeout:8000}).catch(()=>option.click({force:true,timeout:4000}));await pause(page,250);return true;}
+  const text=page.getByText(exact).last();
+  if(await isVisible(text)){await text.click({timeout:8000}).catch(()=>text.click({force:true,timeout:4000}));await pause(page,250);return true;}
+  // Algunos autocompletados aceptan escribir el valor antes de seleccionar.
+  await input.fill(String(value),{timeout:5000}).catch(()=>{});await pause(page,400);
+  const retry=page.getByRole('option',{name:new RegExp(String(value).replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'i')}).first();
+  if(await isVisible(retry)){await retry.click({force:true});await pause(page,250);return true;}
+  throw new Error(`No apareció la opción ${label}: ${value}.`);
+}
+async function fillContactAndPassengers(page){
+  await ensureGuestAccessClosed(page);
+  const adults=Math.max(1,Number(config.adults)||1);
+  const passengerValues=[
+    [config.passenger1FirstName||config.contactFirstName||'Fjie',config.passenger1LastName||config.contactLastName||'Kfkfr'],
+    [config.passenger2FirstName||'Prueba',config.passenger2LastName||'Mfe']
+  ];
+  for(let i=0;i<adults;i++){
+    const [first,last]=passengerValues[i]||[`Pasajero${i+1}`,'Mfe'];
+    await fillPassengerPanel(page,i,String(first),String(last));
+    // Vueling suele mostrar «Reserva más rápido» justo después de validar el primer viajero.
+    await ensureGuestAccessClosed(page,{required:true});
+  }
+  await snapshot(page,'05b-pasajeros-rellenados');
+
+  const contact=page.locator('vy-contact-form-panel').first();
+  if(!(await isVisible(contact)))throw new Error('No aparece el bloque «Persona de contacto».');
+  await ensureGuestAccessClosed(page,{required:true});
+
+  // Si Vueling deja «Otro» como contacto aparecen Nombre y Apellidos editables. Cuando utiliza
+  // automáticamente al primer viajero, esos campos se sustituyen por «Nombre y apellidos» y no
+  // hace falta tocarlos.
+  const contactFirst=panelField(contact,/^Nombre\*?$/i);
+  if(await isVisible(contactFirst))await fillPanelField(page,contact,/^Nombre\*?$/i,config.contactFirstName,{label:'nombre de contacto'});
+  const contactLast=panelField(contact,/^Apellidos?\*?$/i);
+  if(await isVisible(contactLast))await fillPanelField(page,contact,/^Apellidos?\*?$/i,config.contactLastName,{label:'apellidos de contacto'});
+
+  await fillPanelField(page,contact,/Email/i,config.email,{label:'Email',type:'email'});
+  await chooseAutocompleteValue(page,contact,/País de residencia/i,config.country,'país');
+  await chooseAutocompleteValue(page,contact,/Prefijo/i,config.phonePrefix||'+34','prefijo');
+  await fillPanelField(page,contact,/Teléfono móvil|Móvil|Teléfono/i,config.phone,{label:'Teléfono móvil',type:'tel'});
+
+  await ensureGuestAccessClosed(page,{required:true});
+  const marketing=contact.getByText(/Quiero recibir información y ofertas/i).first();
+  if(await isVisible(marketing)){
+    const box=contact.locator('input[type="checkbox"]').first();
+    if(await isVisible(box)){
+      if(config.marketingConsent)await box.check({force:true}).catch(()=>box.click({force:true}));
+      else await box.uncheck({force:true}).catch(()=>{});
+    }
+  }
+  await checkLabel(page,/política de privacidad|acepto.*condiciones|he leído.*privacidad/i,true);
+  await snapshot(page,'05c-contacto-rellenado');
+
+  await ensureGuestAccessClosed(page,{required:true});
+  const continueButton=page.getByRole('button',{name:/^CONTINUAR$|^Continuar$/i}).last();
+  if(!(await isVisible(continueButton)))throw new Error('No aparece CONTINUAR después de completar pasajeros y contacto.');
+  await continueButton.scrollIntoViewIfNeeded().catch(()=>{});
+  try{await continueButton.click({timeout:10000});}
+  catch{
+    await ensureGuestAccessClosed(page,{required:true});
+    await continueButton.click({force:true,timeout:6000});
+  }
+  await pause(page,900);
+}
+
 async function skipSeatsAndExtras(page){
   await clickFirst(page,[page.getByRole('button',{name:/continuar sin asientos/i}),page.getByText(/continuar sin asientos/i)],{});
   await clickFirst(page,[page.getByRole('button',{name:/continuar sin seleccionar/i}),page.getByText(/continuar sin seleccionar/i)],{});
