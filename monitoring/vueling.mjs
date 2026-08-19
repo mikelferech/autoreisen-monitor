@@ -1,4 +1,4 @@
-// MFE_VUELING_AUTOMATION_VERSION: 1.0.3
+// MFE_VUELING_AUTOMATION_VERSION: 1.0.4
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
@@ -165,12 +165,45 @@ async function selectRequestedFlights(page){
 }
 async function selectFlyLight(page){
   const title=page.getByText(/FLY\s*LIGHT/i).first();await title.waitFor({state:'visible',timeout:35000}).catch(()=>{});if(!(await isVisible(title)))throw new Error('No aparece la tarifa FLY LIGHT después de seleccionar ida y vuelta.');
-  const card=title.locator('xpath=ancestor::*[self::article or self::section or self::div][.//button][1]');
+  const card=title.locator('xpath=ancestor::*[self::article or self::section or self::div][contains(translate(normalize-space(.),"SELECCIONADO","seleccionado"),"seleccionado") or .//button][1]');
+  const cardText=await card.innerText().catch(()=>'');
+  if(/Seleccionado/i.test(cardText)){console.log('[vueling] FLY LIGHT ya aparece seleccionada.');return;}
   const button=card.getByRole('button').filter({hasText:/0[,.]00|€|seleccionar|elegir/i}).last();
-  if(await isVisible(button)){await button.click();await pause(page,1200);return;}
+  if(await isVisible(button)){await button.click();await pause(page,1200);console.log('[vueling] Tarifa FLY LIGHT seleccionada mediante su botón.');return;}
   if(!(await clickFirst(page,[title],{required:true,label:'tarifa FLY LIGHT'})))throw new Error('No se pudo seleccionar FLY LIGHT.');
+  console.log('[vueling] Tarifa FLY LIGHT seleccionada mediante la tarjeta.');
 }
-async function continueAsGuest(page){await clickFirst(page,[page.getByRole('button',{name:/continuar como invitado|seguir como invitado|invitado/i}),page.getByText(/continuar como invitado/i)],{});}
+async function contactFormReady(page){
+  const first=page.locator('input[placeholder^="Nombre"]:not([placeholder*="apellidos" i])').first();
+  if(await isVisible(first))return true;
+  const heading=page.getByText(/Persona de contacto|¿Quién viajará\?|Datos de contacto/i).first();
+  return await isVisible(heading);
+}
+async function continueFareAndReachContact(page,{timeoutMs=90000}={}){
+  // Tras seleccionar FLY LIGHT Vueling mantiene la pantalla de tarifas hasta pulsar el botón
+  // fijo CONTINUAR. En ejecuciones anteriores intentábamos rellenar el contacto sin hacer este paso.
+  const continueButton=page.getByRole('button',{name:/^CONTINUAR$|^Continuar$/i}).last();
+  await continueButton.waitFor({state:'visible',timeout:30000}).catch(()=>{});
+  if(!(await isVisible(continueButton)))throw new Error('FLY LIGHT está seleccionada, pero no aparece el botón CONTINUAR de tarifas.');
+  await continueButton.scrollIntoViewIfNeeded().catch(()=>{});
+  await continueButton.click({timeout:10000}).catch(()=>continueButton.click({force:true,timeout:5000}));
+  await pause(page,900);await snapshot(page,'04b-despues-continuar-tarifa');
+  const deadline=Date.now()+timeoutMs;let guestClicked=false,lastLog=0;
+  while(Date.now()<deadline){
+    if(await contactFormReady(page)){console.log('[vueling] Formulario de contacto detectado.');return;}
+    const guest=page.getByRole('button',{name:/continuar como invitado|seguir como invitado|como invitado/i}).first();
+    const guestText=page.getByText(/continuar como invitado|seguir como invitado/i).first();
+    const target=await isVisible(guest)?guest:(await isVisible(guestText)?guestText:null);
+    if(target&&!guestClicked){
+      guestClicked=true;console.log('[vueling] Pantalla de acceso detectada; continuando como invitado.');
+      await target.scrollIntoViewIfNeeded().catch(()=>{});await target.click({force:true,timeout:8000}).catch(()=>{});await pause(page,900);await snapshot(page,'04c-continuar-como-invitado');
+      continue;
+    }
+    if(Date.now()-lastLog>15000){lastLog=Date.now();console.log(`[vueling] Esperando formulario de contacto (${Math.round((timeoutMs-(deadline-Date.now()))/1000)} s). URL: ${page.url()}`);}
+    await page.waitForTimeout(600);
+  }
+  throw new Error(`Tras FLY LIGHT y CONTINUAR no apareció el formulario de contacto${guestClicked?' después de continuar como invitado':''}. URL: ${page.url()}`);
+}
 async function fillContactAndPassengers(page){
   await fillFirst(page,[page.getByLabel(/^Nombre\*?$/i).first(),page.locator('input[placeholder^="Nombre"]:not([placeholder*="apellidos"])').first()],config.contactFirstName,{required:true,label:'Nombre de contacto'});
   await fillFirst(page,[page.getByLabel(/^Apellidos?\*?$/i).first(),page.locator('input[placeholder^="Apellidos"]').first()],config.contactLastName,{required:true,label:'Apellidos de contacto'});
@@ -243,8 +276,8 @@ async function monitorVueling(context,page){
   }else{
     await applyDirectOnlyIfNeeded(page);await snapshot(page,'01c-resultados-vuelos');await assertFlightSelection(page);await selectRequestedFlights(page);
   }
-  page=await waitForFarePage(context,page);await selectFlyLight(page);await snapshot(page,'04-fly-light');await continueAsGuest(page);
-  await fillContactAndPassengers(page);await snapshot(page,'05-pasajeros');
+  page=await waitForFarePage(context,page);await selectFlyLight(page);await snapshot(page,'04-fly-light');await continueFareAndReachContact(page);
+  await snapshot(page,'04d-contacto-listo');await fillContactAndPassengers(page);await snapshot(page,'05-pasajeros');
   await skipSeatsAndExtras(page);await snapshot(page,'06-sin-asientos');
   await chooseUnderseatBag(page);await openCheckedBaggage(page);await snapshot(page,'07-equipaje');
   await configureCheckedBaggage(page);const prices=await waitForSummary(page);await snapshot(page,'08-resumen-final');
