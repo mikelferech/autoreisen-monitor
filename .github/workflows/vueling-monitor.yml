@@ -1,0 +1,70 @@
+name: Vueling · MFE Viajes
+
+on:
+  schedule:
+    - cron: '0 9 * * *'
+      timezone: "Europe/Madrid"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Forzar comprobación"
+        required: false
+        default: "true"
+      telegram_test:
+        description: "Solo probar Telegram"
+        required: false
+        default: "false"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vueling-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: monitoring
+    env:
+      MFE_VUELING_WORKER_URL: ${{ secrets.MFE_VUELING_WORKER_URL }}
+      MFE_VUELING_MONITOR_SECRET: ${{ secrets.MFE_VUELING_MONITOR_SECRET }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      MFE_FORCE_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.force || 'false' }}
+      MFE_TEST_TELEGRAM: ${{ github.event_name == 'workflow_dispatch' && inputs.telegram_test || 'false' }}
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: monitoring/package-lock.json
+      - name: Instalar dependencias Node
+        run: npm ci
+      - name: Comprobar Chrome preinstalado
+        shell: bash
+        run: |
+          set -e
+          if command -v google-chrome >/dev/null 2>&1; then
+            google-chrome --version
+          elif command -v google-chrome-stable >/dev/null 2>&1; then
+            google-chrome-stable --version
+          else
+            echo "::error::El runner no tiene Google Chrome preinstalado."
+            exit 1
+          fi
+      - name: Ejecutar monitor Vueling
+        run: node vueling.mjs
+      - name: Guardar diagnóstico siempre
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vueling-diagnostico-${{ github.run_number }}
+          path: monitoring/artifacts/vueling/
+          if-no-files-found: ignore
+          retention-days: 7
