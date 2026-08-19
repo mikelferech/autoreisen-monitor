@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "monitor": "node monitor.mjs",
-    "monitor:autoreisen": "node monitor.mjs"
+    "monitor:autoreisen": "node monitor.mjs",
+    "monitor:cordial": "node cordial-run.mjs"
   },
   "dependencies": {
     "playwright": "1.54.1"
