@@ -1,4 +1,4 @@
-// MFE_VUELING_AUTOMATION_VERSION: 1.0.8
+// MFE_VUELING_AUTOMATION_VERSION: 1.0.9
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
@@ -8,7 +8,7 @@ const CONFIG_FILE=new URL('./vueling-config.json',import.meta.url);
 const defaults={
   enabled:true,origin:'BIO',destination:'LPA',departureDate:'2026-09-14',returnDate:'2026-09-21',
   outboundFlight:'VY3272',returnFlight:'VY3271',outboundTime:'06:50',returnTime:'16:40',directOnly:true,
-  adults:2,children:0,infants:0,fare:'FLY LIGHT',underseatBag:true,
+  adults:2,children:0,infants:0,fare:'FLY LIGHT',underseatBag:true,sameHandBaggageAllPassengers:true,
   checkedBagKg:25,checkedBagCount:1,checkedBagPassenger:1,sameBaggageRoundTrip:true,sameBaggageAllPassengers:false,
   contactFirstName:'Fjie',contactLastName:'Kfkfr',email:'jdje@g.com',country:'España',phonePrefix:'+34',phone:'654654654',
   passenger1FirstName:'Fjie',passenger1LastName:'Kfkfr',passenger2FirstName:'Prueba',passenger2LastName:'Mfe',
@@ -19,6 +19,7 @@ const saved=JSON.parse(await fs.readFile(CONFIG_FILE,'utf8'));
 const config={...defaults,...(saved.vueling||saved||{})};
 const force=/^(1|true|yes)$/i.test(String(process.env.MFE_FORCE_RUN||''));
 const telegramTest=/^(1|true|yes)$/i.test(String(process.env.MFE_TEST_TELEGRAM||''));
+const dryRun=/^(1|true|yes)$/i.test(String(process.env.MFE_DRY_RUN||''));
 
 function euroNumber(text=''){
   const raw=String(text).replace(/\u00a0/g,' ');
@@ -441,44 +442,174 @@ async function fillContactAndPassengers(page){
   await continueAfterContact(page);
 }
 
-async function skipSeatsAndExtras(page){
-  await clickFirst(page,[page.getByRole('button',{name:/continuar sin asientos/i}),page.getByText(/continuar sin asientos/i)],{});
-  await clickFirst(page,[page.getByRole('button',{name:/continuar sin seleccionar/i}),page.getByText(/continuar sin seleccionar/i)],{});
+async function setSwitchNearText(page,pattern,wanted,{index=0,label='interruptor'}={}){
+  const texts=page.getByText(pattern);const visible=[];const count=await texts.count().catch(()=>0);
+  for(let i=0;i<count;i++){const t=texts.nth(i);if(await isVisible(t))visible.push(t);}
+  const text=index<0?visible.at(index):visible[index];if(!text)return false;
+  const host=text.locator('xpath=ancestor::*[self::mat-slide-toggle or self::label or self::div][.//input[@type="checkbox"] or @role="switch"][1]');
+  let input=host.locator('input[type="checkbox"]').first();
+  if(!(await isVisible(input)))input=text.locator('xpath=ancestor::*[self::mat-slide-toggle or self::label or self::div][1]//input[@type="checkbox"]').first();
+  let current=null;
+  if(await input.count().catch(()=>0)){current=await input.isChecked().catch(()=>null);}
+  if(current===null){const sw=host.locator('[role="switch"]').first();if(await sw.count().catch(()=>0)){const aria=await sw.getAttribute('aria-checked').catch(()=>null);if(aria!==null)current=aria==='true';}}
+  if(current===wanted)return true;
+  const clickable=(await isVisible(input))?input:host;
+  if(await isVisible(clickable)){await clickable.click({force:true,timeout:7000}).catch(()=>text.click({force:true,timeout:5000}));await pause(page,450);return true;}
+  console.warn(`[vueling] No se pudo accionar ${label}.`);return false;
 }
-async function chooseUnderseatBag(page){
+async function seatPageActive(page){return /\/booking\/seats/i.test(String(page.url()||''))||await page.getByText(/¿DÓNDE QUIERES SENTARTE\?|Continuar sin elegir asientos/i).first().isVisible().catch(()=>false);}
+async function luggagePageActive(page){return /\/booking\/services/i.test(String(page.url()||''))||await page.getByText(/SELECCIONA TU EQUIPAJE|EQUIPAJE DE MANO/i).first().isVisible().catch(()=>false);}
+async function dismissSeatUpsell(page){
+  const dialog=page.locator('mat-dialog-container,.cdk-overlay-pane,[role="dialog"]').filter({hasText:/¿Y SI ELIGES TU ASIENTO AHORA\?|QUIERO ELEGIRLO AHORA/i}).last();
+  if(!(await isVisible(dialog)))return false;
+  const skip=dialog.getByRole('button',{name:/CONTINUAR SIN (?:ELEGIR )?ASIENTOS/i}).first();
+  if(!(await isVisible(skip)))return false;
+  await skip.click({timeout:10000}).catch(()=>skip.click({force:true,timeout:5000}));
+  await dialog.waitFor({state:'hidden',timeout:12000}).catch(()=>{});await pause(page,700);
+  console.log('[vueling] Confirmación de asientos rechazada.');return true;
+}
+async function skipSeats(page){
+  for(let attempt=0;attempt<3;attempt++){
+    if(await luggagePageActive(page))return true;
+    if(!(await seatPageActive(page)))await page.getByText(/¿DÓNDE QUIERES SENTARTE\?|Continuar sin elegir asientos/i).first().waitFor({state:'visible',timeout:60000}).catch(()=>{});
+    const skip=page.getByRole('button',{name:/CONTINUAR SIN (?:ELEGIR )?ASIENTOS/i}).last();
+    if(!(await isVisible(skip)))throw new Error('No aparece «Continuar sin elegir asientos».');
+    await skip.scrollIntoViewIfNeeded().catch(()=>{});await skip.click({timeout:10000}).catch(()=>skip.click({force:true,timeout:5000}));await pause(page,600);
+    await dismissSeatUpsell(page);
+    const deadline=Date.now()+45000;
+    while(Date.now()<deadline){if(await luggagePageActive(page)){console.log('[vueling] Asientos omitidos.');return true;}if(await seatPageActive(page)&&await page.getByRole('button',{name:/CONTINUAR SIN (?:ELEGIR )?ASIENTOS/i}).last().isVisible().catch(()=>false))break;await pause(page,700);}
+  }
+  if(await luggagePageActive(page))return true;
+  throw new Error('Vueling no avanzó desde asientos hasta equipaje.');
+}
+async function selectUnderseatOption(page){
   if(!config.underseatBag)return;
-  const matches=page.getByText(/Solo 1 pieza bajo el asiento|1 pieza de equipaje de mano bajo el asiento|40x30x20/i);const count=await matches.count().catch(()=>0);
-  for(let i=0;i<Math.min(count,2);i++){
-    const txt=matches.nth(i);if(!(await isVisible(txt)))continue;const card=txt.locator('xpath=ancestor::*[self::label or self::button or self::div][1]');await card.click({force:true}).catch(()=>txt.click({force:true}));await pause(page,250);
+  await page.getByText(/SELECCIONA TU EQUIPAJE|EQUIPAJE DE MANO/i).first().waitFor({state:'visible',timeout:60000});
+  const adults=Math.max(1,Number(config.adults)||1),sameAll=config.sameHandBaggageAllPassengers!==false&&adults>1;
+  if(adults>1)await setSwitchNearText(page,/Misma selección para todos/i,sameAll,{index:0,label:'Misma selección para todos · equipaje de mano'});
+  const selectOne=async()=>{
+    let option=page.getByText(/1 PIEZA DE EQUIPAJE DE MANO/i).first();
+    if(!(await isVisible(option))){
+      const pending=page.getByText(/Selección pendiente|Sin seleccionar/i).first();if(await isVisible(pending)){await pending.click({force:true});await pause(page,450);}
+      option=page.getByText(/1 PIEZA DE EQUIPAJE DE MANO/i).first();
+    }
+    await option.waitFor({state:'visible',timeout:15000});
+    let card=option.locator('xpath=ancestor::*[self::label or self::div][.//input[@type="radio"] or @role="radio"][1]');
+    let radio=card.locator('input[type="radio"]').first();
+    if(await isVisible(radio)){await radio.check({force:true}).catch(()=>radio.click({force:true}));}
+    else await card.click({force:true}).catch(()=>option.click({force:true}));
+    await pause(page,500);
+  };
+  if(sameAll){await selectOne();}
+  else{
+    const names=[[config.passenger1FirstName,config.passenger1LastName],[config.passenger2FirstName,config.passenger2LastName]].slice(0,adults);
+    for(let i=0;i<names.length;i++){
+      const full=names[i].filter(Boolean).join(' ').trim();
+      if(full){const tab=page.getByText(new RegExp(full.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'i')).first();if(await isVisible(tab)){await tab.click({force:true});await pause(page,350);}}
+      await selectOne();
+    }
+  }
+  console.log(`[vueling] Equipaje de mano: pieza bajo asiento seleccionada${sameAll?' para todos':''}.`);
+}
+async function ensureCheckedBaggageVisible(page){
+  const heading=page.getByText(/EQUIPAJE FACTURADO(?: EN BODEGA)?|Añade tu maleta ahora/i).first();await heading.waitFor({state:'visible',timeout:30000});await heading.scrollIntoViewIfNeeded().catch(()=>{});await pause(page,350);
+  const kg=Number(config.checkedBagKg)||25;
+  if(await page.getByText(new RegExp(`MALETA DE\\s*${kg}\\s*KG`,'i')).first().isVisible().catch(()=>false))return;
+  const add=page.getByRole('button',{name:/desde\s*\d+.*€|añade tu maleta|añadir maleta/i}).first();
+  if(await isVisible(add)){await add.click({force:true});await pause(page,650);}
+  await page.getByText(new RegExp(`MALETA DE\\s*${kg}\\s*KG`,'i')).first().waitFor({state:'visible',timeout:20000});
+}
+async function selectPassengerForCheckedBag(page){
+  const passenger=Math.max(1,Number(config.checkedBagPassenger)||1);if(passenger<=1)return;
+  const values=[[config.passenger1FirstName,config.passenger1LastName],[config.passenger2FirstName,config.passenger2LastName]];
+  const full=(values[passenger-1]||[]).filter(Boolean).join(' ').trim();
+  if(full){const loc=page.getByText(new RegExp(full.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'i')).last();if(await isVisible(loc)){await loc.click({force:true});await pause(page,400);return;}}
+  const tabs=page.getByRole('tab');const count=await tabs.count().catch(()=>0);if(count>=passenger){await tabs.nth(passenger-1).click({force:true});await pause(page,400);}
+}
+async function incrementBagDirection(row,labelPattern,count){
+  const label=row.getByText(labelPattern).first();
+  if(await isVisible(label)){
+    const group=label.locator('xpath=ancestor::*[self::div][.//button][1]');
+    for(let i=0;i<count;i++){
+      const enabled=group.locator('button:not([disabled])');const n=await enabled.count().catch(()=>0);if(!n)throw new Error(`No aparece el botón + para ${String(labelPattern)}.`);
+      await enabled.last().click({force:true});await new Promise(r=>setTimeout(r,300));
+    }
+    return true;
+  }
+  return false;
+}
+async function incrementSingleBagCounter(row,count){
+  for(let i=0;i<count;i++){
+    const enabled=row.locator('button:not([disabled])');const n=await enabled.count().catch(()=>0);if(!n)throw new Error('No se encontró el botón + de la maleta.');
+    await enabled.last().click({force:true});await new Promise(r=>setTimeout(r,300));
   }
 }
-async function openCheckedBaggage(page){
-  const section=page.getByText(/Añade tu maleta ahora/i).first();if(await isVisible(section)){const box=section.locator('xpath=ancestor::*[self::section or self::div][.//button][1]');const b=box.getByRole('button').filter({hasText:/desde|€|añadir/i}).first();if(await isVisible(b)){await b.click();await pause(page);return;}}
-  await clickFirst(page,[page.getByRole('button',{name:/desde\s*\d+.*€|añade.*maleta|añadir maleta/i})],{required:true,label:'Añade tu maleta ahora'});
-}
 async function configureCheckedBaggage(page){
-  await checkLabel(page,/Mismo equipaje para ida y vuelta/i,Boolean(config.sameBaggageRoundTrip));
-  await checkLabel(page,/Mismo equipaje para todos los viajeros/i,Boolean(config.sameBaggageAllPassengers));
-  // Si hay pestañas por pasajero, selecciona el pasajero configurado.
-  const passenger=Number(config.checkedBagPassenger)||1;if(passenger>1){const tabs=page.getByRole('tab');const count=await tabs.count().catch(()=>0);if(count>=passenger)await tabs.nth(passenger-1).click().catch(()=>{});}
-  const kg=Number(config.checkedBagKg)||25;const rowText=page.getByText(new RegExp(`^${kg}\\s*KG$`,'i')).first();if(!(await isVisible(rowText)))throw new Error(`No aparece la opción de maleta de ${kg} kg.`);
+  const count=Math.max(0,Number(config.checkedBagCount)||0);if(!count){console.log('[vueling] Sin maleta facturada configurada.');return;}
+  await ensureCheckedBaggageVisible(page);
+  const adults=Math.max(1,Number(config.adults)||1);
+  if(adults>1)await setSwitchNearText(page,/Misma selección para todos/i,Boolean(config.sameBaggageAllPassengers),{index:1,label:'Misma selección para todos · equipaje facturado'});
+  await selectPassengerForCheckedBag(page);
+  const roundToggle=page.getByText(/Mismo equipaje para ida y vuelta/i).first();const hasRoundToggle=await isVisible(roundToggle);
+  if(hasRoundToggle)await setSwitchNearText(page,/Mismo equipaje para ida y vuelta/i,Boolean(config.sameBaggageRoundTrip),{index:0,label:'Mismo equipaje ida/vuelta'});
+  const kg=Number(config.checkedBagKg)||25;const rowText=page.getByText(new RegExp(`MALETA DE\\s*${kg}\\s*KG`,'i')).first();await rowText.waitFor({state:'visible',timeout:15000});
   const row=rowText.locator('xpath=ancestor::*[self::div or self::li][.//button][1]');
-  let plus=row.getByRole('button',{name:/\+|añadir|incrementar/i}).last();if(!(await isVisible(plus)))plus=row.locator('button').last();
-  const count=Math.max(0,Number(config.checkedBagCount)||0);for(let i=0;i<count;i++){await plus.click({force:true});await pause(page,250);}
-  await clickFirst(page,[page.getByRole('button',{name:/ACEPTAR|Aceptar/i})],{required:true,label:'Aceptar equipaje facturado'});
-  await clickFirst(page,[page.getByRole('button',{name:/CONTINUAR|Continuar/i})],{});
-  await clickFirst(page,[page.getByRole('button',{name:/continuar sin|no gracias|omitir/i}),page.getByText(/continuar sin/i)],{});
+  if(hasRoundToggle&&config.sameBaggageRoundTrip){await incrementSingleBagCounter(row,count);}
+  else{
+    const outboundDone=await incrementBagDirection(row,/^IDA$/i,count);
+    if(!outboundDone)await incrementSingleBagCounter(row,count);
+    if(config.sameBaggageRoundTrip){const returnDone=await incrementBagDirection(row,/^VUELTA$/i,count);if(!returnDone&&outboundDone)throw new Error('No aparece el contador de maleta para la vuelta.');}
+  }
+  const accept=page.getByRole('button',{name:/^ACEPTAR$/i}).last();if(await isVisible(accept)){await accept.click({force:true});await pause(page,550);}
+  console.log(`[vueling] Maleta ${kg} kg configurada · ${count} unidad(es) · pasajero ${config.checkedBagPassenger||1}${config.sameBaggageRoundTrip?' · ida y vuelta':''}.`);
 }
-async function extractMoneyNear(page,labelPattern){
-  const label=page.getByText(labelPattern).last();if(!(await isVisible(label)))return 0;
-  const parent=label.locator('xpath=ancestor::*[self::div or self::section or self::li][1]');const text=await parent.innerText().catch(()=>label.innerText());return euroNumber(text);
+async function continueFromLuggage(page){
+  const continueButton=page.getByRole('button',{name:/^CONTINUAR$/i}).last();await continueButton.waitFor({state:'visible',timeout:20000});await continueButton.scrollIntoViewIfNeeded().catch(()=>{});await continueButton.click({timeout:10000}).catch(()=>continueButton.click({force:true,timeout:5000}));
+  await page.getByText(/PERSONALIZA TU VUELO|ASEGURA TU VIAJE|SIN SEGURO/i).first().waitFor({state:'visible',timeout:60000});await pause(page,600);
 }
+async function selectNoInsuranceAndContinue(page){
+  await page.getByText(/ASEGURA TU VIAJE|SIN SEGURO/i).first().waitFor({state:'visible',timeout:60000});
+  const noInsurance=page.getByText(/^SIN SEGURO$/i).first();await noInsurance.scrollIntoViewIfNeeded().catch(()=>{});
+  let card=noInsurance.locator('xpath=ancestor::*[self::div or self::article or self::section][.//button][1]');
+  const selected=card.getByText(/Seleccionado/i).first();
+  if(!(await isVisible(selected))){
+    let zero=card.getByRole('button',{name:/0[,.]00\s*€/i}).first();
+    if(!(await isVisible(zero)))zero=card.getByText(/0[,.]00\s*€/i).last();
+    if(await isVisible(zero))await zero.click({force:true});else await card.click({force:true});
+    await pause(page,650);
+  }
+  console.log('[vueling] Seguro: SIN SEGURO.');await snapshot(page,'08a-sin-seguro');
+  const continueButton=page.getByRole('button',{name:/^CONTINUAR$/i}).last();await continueButton.scrollIntoViewIfNeeded().catch(()=>{});await continueButton.click({timeout:10000}).catch(()=>continueButton.click({force:true,timeout:5000}));
+  await page.getByText(/ÚLTIMO PASO|ASÍ QUEDA TU VIAJE|¿CÓMO PREFIERES PAGAR\?/i).first().waitFor({state:'visible',timeout:70000});await pause(page,800);
+}
+async function openFinalSummary(page){
+  const already=page.getByText(/TOTAL IDA/i).first();if(await isVisible(already))return;
+  const header=page.locator('header').first();let trigger=header.getByRole('button').filter({hasText:/\d+[.,]\d{2}\s*€/}).last();
+  if(!(await isVisible(trigger)))trigger=page.getByRole('button').filter({hasText:/\d+[.,]\d{2}\s*€/}).first();
+  if(!(await isVisible(trigger))){const amount=page.getByText(/\d+[.,]\d{2}\s*€/).first();if(await isVisible(amount))trigger=amount;}
+  if(!(await isVisible(trigger)))throw new Error('No aparece el botón del total para abrir el desglose final.');
+  await trigger.click({force:true});await page.getByText(/TOTAL IDA/i).first().waitFor({state:'visible',timeout:15000});await pause(page,500);
+}
+function moneyFromString(value=''){return euroNumber(String(value));}
+function labeledMoney(text,label){const m=String(text).match(new RegExp(`${label}\\s*([\\d.]+,\\d{2})\\s*€`,'i'));return m?moneyFromString(m[1]):0;}
+function baggageMoney(text){const matches=[...String(text).matchAll(/\d+\s+maletas?\s+facturadas?[^\n]*?([\d.]+,\d{2})\s*€|\d+\s+maleta\s+facturada[^\n]*?([\d.]+,\d{2})\s*€/gi)];if(!matches.length)return 0;return matches.reduce((sum,m)=>sum+moneyFromString(m[1]||m[2]||''),0);}
 async function waitForSummary(page){
-  const totalLabel=page.getByText(/PRECIO TOTAL/i).last();await totalLabel.waitFor({state:'visible',timeout:45000});await pause(page,800);
-  const total=await extractMoneyNear(page,/PRECIO TOTAL/i),outbound=await extractMoneyNear(page,/TOTAL IDA/i),returnPrice=await extractMoneyNear(page,/TOTAL VUELTA/i),services=await extractMoneyNear(page,/TOTAL SERVICIOS/i);
-  if(!(total>0))throw new Error('La pantalla final apareció pero no se pudo leer PRECIO TOTAL.');
-  const tolerance=.05;if(outbound>0&&returnPrice>0&&Math.abs(total-(outbound+returnPrice+services))>tolerance)console.warn('[vueling] El desglose no suma exactamente el total. Se guardará con advertencia.');
-  return {total,outbound,return:returnPrice,baggage:services,services};
+  await openFinalSummary(page);const body=await page.locator('body').innerText();
+  const total=labeledMoney(body,'(?:PRECIO TOTAL|TOTAL RESERVA)')||moneyFromString((body.match(/^\s*([\d.]+,\d{2})\s*€/m)||[])[1]||'');
+  const outStart=body.search(/\bIDA\b/i),retStart=body.search(/\bVUELTA\b/i);let outboundGross=labeledMoney(body,'TOTAL IDA'),returnGross=labeledMoney(body,'TOTAL VUELTA'),services=labeledMoney(body,'TOTAL SERVICIOS');
+  const outText=outStart>=0&&retStart>outStart?body.slice(outStart,retStart):body;const retText=retStart>=0?body.slice(retStart):body;
+  const baggageOutbound=baggageMoney(outText),baggageReturn=baggageMoney(retText),baggageLines=baggageOutbound+baggageReturn;
+  let outbound=outboundGross,returnPrice=returnGross,baggage=services||baggageLines,mode='separate-services';
+  const tol=.08;
+  if(!(services>0&&Math.abs(total-(outboundGross+returnGross+services))<tol)){
+    // En la vista de escritorio Vueling incluye cada maleta dentro de TOTAL IDA/TOTAL VUELTA.
+    if(baggageLines>0){outbound=Math.max(0,outboundGross-baggageOutbound);returnPrice=Math.max(0,returnGross-baggageReturn);baggage=baggageLines;mode='baggage-inside-leg-totals';}
+  }
+  const otherServices=Math.max(0,total-(outbound+returnPrice+baggage));if(otherServices>tol)baggage+=otherServices;
+  if(!(total>0&&outboundGross>0&&returnGross>0))throw new Error('El desglose final apareció pero no se pudieron leer total, ida y vuelta.');
+  if(Math.abs(total-(outbound+returnPrice+baggage))>.12)throw new Error(`El desglose no cuadra: total ${moneyText(total)} frente a ida+vuelta+maleta ${moneyText(outbound+returnPrice+baggage)}.`);
+  console.log(`[vueling] Resumen final (${mode}) · ida ${moneyText(outbound)} · vuelta ${moneyText(returnPrice)} · maleta ${moneyText(baggage)} · TOTAL ${moneyText(total)}.`);
+  return {total,outbound,return:returnPrice,baggage,services:baggage,outboundGross,returnGross,baggageOutbound,baggageReturn,otherServices};
 }
 async function monitorVueling(context,page){
   const deeplink=buildVuelingDeeplink();await page.goto(deeplink,{waitUntil:'domcontentloaded',timeout:60000});await pause(page,1200);await snapshot(page,'01a-antes-cookies');await acceptCookies(page);await snapshot(page,'01b-despues-cookies');
@@ -494,14 +625,18 @@ async function monitorVueling(context,page){
   }
   page=await waitForFarePage(context,page);await selectFlyLight(page);await snapshot(page,'04-fly-light');await continueFareAndReachContact(page);
   await snapshot(page,'04d-contacto-listo');await fillContactAndPassengers(page);await snapshot(page,'05-pasajeros');
-  await skipSeatsAndExtras(page);await snapshot(page,'06-sin-asientos');
-  await chooseUnderseatBag(page);await openCheckedBaggage(page);await snapshot(page,'07-equipaje');
-  await configureCheckedBaggage(page);const prices=await waitForSummary(page);await snapshot(page,'08-resumen-final');
-  const body=await page.locator('body').innerText();
-  const outboundOk=!config.outboundFlight||new RegExp(config.outboundFlight,'i').test(body),returnOk=!config.returnFlight||new RegExp(config.returnFlight,'i').test(body);
-  const outboundTimeOk=!config.outboundTime||new RegExp(String(config.outboundTime).replace(':','[:h]'),'i').test(body),returnTimeOk=!config.returnTime||new RegExp(String(config.returnTime).replace(':','[:h]'),'i').test(body);
-  if(!outboundOk||!returnOk||!outboundTimeOk||!returnTimeOk)throw new Error(`El resumen final no confirma los vuelos/horarios esperados (${config.outboundFlight} ${config.outboundTime} / ${config.returnFlight} ${config.returnTime}).`);
-  return {ok:true,status:'ok',availability:'Disponible',...prices,checkedAt:new Date().toISOString(),source:'Vueling · GitHub Actions + Playwright',deeplink,flightValidation:{outboundFlight:config.outboundFlight,returnFlight:config.returnFlight,outboundTime:config.outboundTime,returnTime:config.returnTime,outboundOk,returnOk,outboundTimeOk,returnTimeOk},fare:config.fare,passengers:{adults:Number(config.adults)||1,children:Number(config.children)||0,infants:Number(config.infants)||0},baggageConfig:{underseatBag:Boolean(config.underseatBag),checkedBagKg:Number(config.checkedBagKg)||0,checkedBagCount:Number(config.checkedBagCount)||0,checkedBagPassenger:Number(config.checkedBagPassenger)||1,sameBaggageRoundTrip:Boolean(config.sameBaggageRoundTrip)}};
+  await skipSeats(page);await snapshot(page,'06a-asientos-omitidos');
+  await selectUnderseatOption(page);await snapshot(page,'07a-equipaje-mano');
+  await configureCheckedBaggage(page);await snapshot(page,'07b-maleta-facturada');
+  await continueFromLuggage(page);await snapshot(page,'08-extras');
+  await selectNoInsuranceAndContinue(page);await snapshot(page,'08b-pago');
+  const prices=await waitForSummary(page);await snapshot(page,'09-resumen-final');
+  const summaryBody=await page.locator('body').innerText();
+  const outboundTimeOk=!config.outboundTime||new RegExp(String(config.outboundTime).replace(':','[:h]'),'i').test(summaryBody),returnTimeOk=!config.returnTime||new RegExp(String(config.returnTime).replace(':','[:h]'),'i').test(summaryBody);
+  const routesOk=new RegExp(`\\b${String(config.origin||'').toUpperCase()}\\b[\\s\\S]*\\b${String(config.destination||'').toUpperCase()}\\b`,'i').test(summaryBody)&&new RegExp(`\\b${String(config.destination||'').toUpperCase()}\\b[\\s\\S]*\\b${String(config.origin||'').toUpperCase()}\\b`,'i').test(summaryBody);
+  if(!outboundTimeOk||!returnTimeOk||!routesOk)throw new Error(`El resumen final no confirma la ruta/horarios esperados (${config.origin} ${config.outboundTime} / ${config.destination} ${config.returnTime}).`);
+  const outboundOk=true,returnOk=true;
+  return {ok:true,status:'ok',availability:'Disponible',...prices,checkedAt:new Date().toISOString(),source:'Vueling · GitHub Actions + Playwright',deeplink,flightValidation:{outboundFlight:config.outboundFlight,returnFlight:config.returnFlight,outboundTime:config.outboundTime,returnTime:config.returnTime,outboundOk,returnOk,outboundTimeOk,returnTimeOk,routesOk,verifiedBeforeSummary:true},fare:config.fare,passengers:{adults:Number(config.adults)||1,children:Number(config.children)||0,infants:Number(config.infants)||0},baggageConfig:{underseatBag:Boolean(config.underseatBag),sameHandBaggageAllPassengers:config.sameHandBaggageAllPassengers!==false,checkedBagKg:Number(config.checkedBagKg)||0,checkedBagCount:Number(config.checkedBagCount)||0,checkedBagPassenger:Number(config.checkedBagPassenger)||1,sameBaggageRoundTrip:Boolean(config.sameBaggageRoundTrip),sameBaggageAllPassengers:Boolean(config.sameBaggageAllPassengers)}};
 }
 
 if(telegramTest){await sendTelegram(`🧪 MFE Viajes · Vueling Telegram OK\n${new Date().toLocaleString('es-ES',{timeZone:'Europe/Madrid'})}`);process.exit(0);}
@@ -512,8 +647,8 @@ try{browser=await chromium.launch({headless:true,channel:'chrome'});}catch{brows
 const context=await browser.newContext({locale:'es-ES',viewport:{width:430,height:932},isMobile:true,hasTouch:true,userAgent:'Mozilla/5.0 (Linux; Android 16; MFE Viajes Monitor) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136 Mobile Safari/537.36'});
 const page=await context.newPage();
 try{
-  const result=await monitorVueling(context,page);await postResult(result);
-  if(config.telegramEnabled){const prior=Number(previous?.total)||0;const delta=prior?result.total-prior:0,drop=prior>0&&result.total<prior;const notify=Boolean(config.telegramNotifyEveryCheck)||(Boolean(config.telegramNotifyPriceDrop)&&drop);if(notify)await sendTelegram(`✈️ Vueling · MFE Viajes\n${config.outboundFlight} ${config.origin}→${config.destination} · ${config.returnFlight} ${config.destination}→${config.origin}\nIda: ${moneyText(result.outbound)}\nVuelta: ${moneyText(result.return)}\nMaleta/servicios: ${moneyText(result.baggage)}\nTOTAL: ${moneyText(result.total)}${prior?`\nCambio: ${delta>=0?'+':''}${moneyText(delta)}`:''}`);}
+  const result=await monitorVueling(context,page);if(!dryRun)await postResult(result);else console.log('[vueling] DRY RUN: no se envía el resultado al Worker.');
+  if(config.telegramEnabled&&!dryRun){const prior=Number(previous?.total)||0;const delta=prior?result.total-prior:0,drop=prior>0&&result.total<prior;const notify=Boolean(config.telegramNotifyEveryCheck)||(Boolean(config.telegramNotifyPriceDrop)&&drop);if(notify)await sendTelegram(`✈️ Vueling · MFE Viajes\n${config.outboundFlight} ${config.origin}→${config.destination} · ${config.returnFlight} ${config.destination}→${config.origin}\nIda: ${moneyText(result.outbound)}\nVuelta: ${moneyText(result.return)}\nMaleta: ${moneyText(result.baggage)}\nTOTAL: ${moneyText(result.total)}${prior?`\nCambio: ${delta>=0?'+':''}${moneyText(delta)}`:''}`);}
   console.log('[vueling] OK',JSON.stringify(result));
-}catch(error){const result={ok:false,status:'error',error:error?.message||String(error),checkedAt:new Date().toISOString(),source:'Vueling · GitHub Actions + Playwright'};console.error('[vueling] ERROR',error);await snapshot(page,'99-error').catch(()=>{});await postResult(result).catch(e=>console.error('No se pudo guardar el error:',e.message));if(config.telegramEnabled)await sendTelegram(`🔴 Vueling · error del monitor\n${result.error}`).catch(()=>{});process.exitCode=1;
+}catch(error){const result={ok:false,status:'error',error:error?.message||String(error),checkedAt:new Date().toISOString(),source:'Vueling · GitHub Actions + Playwright'};console.error('[vueling] ERROR',error);await snapshot(page,'99-error').catch(()=>{});if(!dryRun)await postResult(result).catch(e=>console.error('No se pudo guardar el error:',e.message));if(config.telegramEnabled&&!dryRun)await sendTelegram(`🔴 Vueling · error del monitor\n${result.error}`).catch(()=>{});process.exitCode=1;
 }finally{await context.close().catch(()=>{});await browser.close().catch(()=>{});}
