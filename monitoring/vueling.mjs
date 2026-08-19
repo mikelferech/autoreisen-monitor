@@ -1,4 +1,4 @@
-// MFE_VUELING_AUTOMATION_VERSION: 1.0.11
+// MFE_VUELING_AUTOMATION_VERSION: 1.0.12
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
@@ -489,34 +489,80 @@ async function skipSeats(page){
   if(await luggagePageActive(page))return true;
   throw new Error('Vueling no avanzó desde asientos hasta equipaje.');
 }
+async function selectUnderseatInJourney(page,journey,label='trayecto'){
+  // IMPORTANTE: no buscamos el texto genérico «1 pieza de equipaje de mano»,
+  // porque ese mismo texto también aparece como descripción dentro de la opción
+  // de 2 piezas. Seleccionamos únicamente el TÍTULO exacto de la tarjeta gratuita.
+  const title=journey.locator('.gcbg-option-title').filter({hasText:/^\s*1\s+pieza\s+de\s+equipaje\s+de\s+mano\s*$/i}).first();
+  await title.waitFor({state:'visible',timeout:18000});
+  const row=title.locator('xpath=ancestor::div[contains(@class,"gcbg-option-row")][1]');
+  const radio=row.locator('input[type="radio"]').first();
+  if(!(await isVisible(radio)))throw new Error(`No aparece el selector de «1 pieza bajo el asiento» para ${label}.`);
+  if(!(await radio.isChecked().catch(()=>false))){
+    await radio.check({force:true}).catch(()=>row.click({force:true}));
+    await pause(page,450);
+  }
+  if(!(await radio.isChecked().catch(()=>false)))throw new Error(`No se pudo seleccionar la pieza bajo el asiento para ${label}.`);
+}
+async function selectUnderseatForPassengerCard(page,card,passengerLabel){
+  const header=card.locator('mat-expansion-panel-header').first();
+  if(await isVisible(header)){
+    const expanded=await header.getAttribute('aria-expanded').catch(()=>null);
+    if(expanded==='false'){await header.click({force:true});await pause(page,450);}
+  }
+  const journeys=card.locator('.gcbg-pax-content__journey');
+  const count=await journeys.count().catch(()=>0);
+  if(count<2)throw new Error(`No aparecen ida y vuelta de equipaje de mano para ${passengerLabel}.`);
+  for(let i=0;i<count;i++){
+    const journey=journeys.nth(i);
+    if(!(await isVisible(journey)))continue;
+    const route=(await journey.locator('.gcbg-pax-content__journey-label').first().textContent().catch(()=>'' )).trim()||`trayecto ${i+1}`;
+    await selectUnderseatInJourney(page,journey,`${passengerLabel} · ${route}`);
+  }
+  const headerText=await card.locator('.gcbg-pax-header').innerText().catch(()=>'');
+  if(/2 piezas de equipaje/i.test(headerText))throw new Error(`${passengerLabel}: Vueling ha dejado seleccionada la opción de 2 piezas en equipaje de mano.`);
+  if(/Sin seleccionar/i.test(headerText))throw new Error(`${passengerLabel}: queda algún trayecto de equipaje de mano sin seleccionar.`);
+}
 async function selectUnderseatOption(page){
   if(!config.underseatBag)return;
-  await page.getByText(/SELECCIONA TU EQUIPAJE|EQUIPAJE DE MANO/i).first().waitFor({state:'visible',timeout:60000});
-  const adults=Math.max(1,Number(config.adults)||1),sameAll=config.sameHandBaggageAllPassengers!==false&&adults>1;
-  if(adults>1)await setSwitchNearText(page,/Misma selección para todos/i,sameAll,{index:0,label:'Misma selección para todos · equipaje de mano'});
-  const selectOne=async()=>{
-    let option=page.getByText(/1 PIEZA DE EQUIPAJE DE MANO/i).first();
-    if(!(await isVisible(option))){
-      const pending=page.getByText(/Selección pendiente|Sin seleccionar/i).first();if(await isVisible(pending)){await pending.click({force:true});await pause(page,450);}
-      option=page.getByText(/1 PIEZA DE EQUIPAJE DE MANO/i).first();
-    }
-    await option.waitFor({state:'visible',timeout:15000});
-    let card=option.locator('xpath=ancestor::*[self::label or self::div][.//input[@type="radio"] or @role="radio"][1]');
-    let radio=card.locator('input[type="radio"]').first();
-    if(await isVisible(radio)){await radio.check({force:true}).catch(()=>radio.click({force:true}));}
-    else await card.click({force:true}).catch(()=>option.click({force:true}));
-    await pause(page,500);
-  };
-  if(sameAll){await selectOne();}
-  else{
-    const names=[[config.passenger1FirstName,config.passenger1LastName],[config.passenger2FirstName,config.passenger2LastName]].slice(0,adults);
-    for(let i=0;i<names.length;i++){
-      const full=names[i].filter(Boolean).join(' ').trim();
-      if(full){const tab=page.getByText(new RegExp(full.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'i')).first();if(await isVisible(tab)){await tab.click({force:true});await pause(page,350);}}
-      await selectOne();
+  await page.getByText(/EQUIPAJE DE MANO/i).first().waitFor({state:'visible',timeout:60000});
+  const adults=Math.max(1,Number(config.adults)||1);
+
+  // La interfaz actual de Vueling usa pestañas «PARA TODOS / POR PASAJERO», no un switch.
+  // Usamos «POR PASAJERO» para poder verificar de forma inequívoca ida y vuelta de cada viajero.
+  // Si la configuración pide la misma selección para todos, aplicamos exactamente la misma opción
+  // a cada pasajero; el resultado económico y de equipaje es el mismo, pero evita que una variante
+  // A/B de Vueling seleccione accidentalmente la opción de 2 piezas (+40 €).
+  if(adults>1){
+    const perPax=page.getByRole('tab',{name:/^\s*POR PASAJERO\s*$/i}).first();
+    if(await isVisible(perPax)){
+      if((await perPax.getAttribute('aria-selected').catch(()=>''))!=='true'){await perPax.click({force:true});await pause(page,600);}
+    }else{
+      const text=page.getByText(/^\s*POR PASAJERO\s*$/i).first();if(await isVisible(text)){await text.click({force:true});await pause(page,600);}
     }
   }
-  console.log(`[vueling] Equipaje de mano: pieza bajo asiento seleccionada${sameAll?' para todos':''}.`);
+
+  let cards=page.locator('vy-gcbg-pax-card');
+  const cardCount=await cards.count().catch(()=>0);
+  if(cardCount>=adults){
+    for(let i=0;i<adults;i++){
+      const card=cards.nth(i);
+      const name=(await card.locator('.gcbg-pax-header__name').first().textContent().catch(()=>'' )).trim()||`Pasajero ${i+1}`;
+      await selectUnderseatForPassengerCard(page,card,name);
+    }
+  }else{
+    // Fallback para una variante sin tarjetas por pasajero: selecciona la opción exacta
+    // en cada trayecto visible, nunca el texto descriptivo de la opción de 2 piezas.
+    const journeys=page.locator('.gcbg-pax-content__journey');
+    const n=await journeys.count().catch(()=>0);if(n<2)throw new Error('No se localizaron los trayectos de equipaje de mano.');
+    for(let i=0;i<n;i++){const journey=journeys.nth(i);if(await isVisible(journey))await selectUnderseatInJourney(page,journey,`trayecto ${i+1}`);}
+  }
+
+  const body=await page.locator('body').innerText().catch(()=>'');
+  if(/2 piezas de equipaje/i.test(body)&&/Selección pendiente/i.test(body)){
+    console.log('[vueling] Aviso: existe texto de 2 piezas en la página; se verifican las tarjetas de pasajero antes de continuar.');
+  }
+  console.log(`[vueling] Equipaje de mano: 1 pieza bajo el asiento seleccionada en ida y vuelta para ${adults} pasajero${adults===1?'':'s'}.`);
 }
 async function ensureCheckedBaggageVisible(page){
   const heading=page.getByText(/EQUIPAJE FACTURADO(?: EN BODEGA)?|Añade tu maleta ahora/i).first();
