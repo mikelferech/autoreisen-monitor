@@ -1,4 +1,4 @@
-// MFE_VUELING_AUTOMATION_VERSION: 1.0.10
+// MFE_VUELING_AUTOMATION_VERSION: 1.0.11
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
@@ -519,87 +519,134 @@ async function selectUnderseatOption(page){
   console.log(`[vueling] Equipaje de mano: pieza bajo asiento seleccionada${sameAll?' para todos':''}.`);
 }
 async function ensureCheckedBaggageVisible(page){
-  const heading=page.getByText(/EQUIPAJE FACTURADO(?: EN BODEGA)?|Añade tu maleta ahora/i).first();await heading.waitFor({state:'visible',timeout:30000});await heading.scrollIntoViewIfNeeded().catch(()=>{});await pause(page,350);
-  const kg=Number(config.checkedBagKg)||25;
-  if(await page.getByText(new RegExp(`MALETA DE\\s*${kg}\\s*KG`,'i')).first().isVisible().catch(()=>false))return;
+  const heading=page.getByText(/EQUIPAJE FACTURADO(?: EN BODEGA)?|Añade tu maleta ahora/i).first();
+  await heading.waitFor({state:'visible',timeout:30000});await heading.scrollIntoViewIfNeeded().catch(()=>{});await pause(page,350);
+  const kg=Number(config.checkedBagKg)||25,weightPattern=new RegExp(`(?:MALETA DE\\s*)?${kg}\\s*KG`,'i');
+  const mobileRow=page.locator('bags-selector-distinct').filter({hasText:weightPattern}).first();
+  if(await isVisible(mobileRow))return mobileRow;
+  const weightText=page.getByText(weightPattern).first();if(await isVisible(weightText))return weightText;
+  // En algunas variantes Vueling muestra antes una tarjeta «Añade tu maleta ahora».
   const add=page.getByRole('button',{name:/desde\s*\d+.*€|añade tu maleta|añadir maleta/i}).first();
-  if(await isVisible(add)){await add.click({force:true});await pause(page,650);}
-  await page.getByText(new RegExp(`MALETA DE\\s*${kg}\\s*KG`,'i')).first().waitFor({state:'visible',timeout:20000});
+  if(await isVisible(add)){await add.click({force:true});await pause(page,850);}
+  await page.getByText(weightPattern).first().waitFor({state:'visible',timeout:30000});
+  return page.getByText(weightPattern).first();
 }
 async function selectPassengerForCheckedBag(page){
-  const passenger=Math.max(1,Number(config.checkedBagPassenger)||1);if(passenger<=1)return;
+  const passenger=Math.max(1,Number(config.checkedBagPassenger)||1);
   const values=[[config.passenger1FirstName,config.passenger1LastName],[config.passenger2FirstName,config.passenger2LastName]];
   const full=(values[passenger-1]||[]).filter(Boolean).join(' ').trim();
-  if(full){const loc=page.getByText(new RegExp(full.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'i')).last();if(await isVisible(loc)){await loc.click({force:true});await pause(page,400);return;}}
+  if(full){
+    const labels=page.getByText(flightPattern(full));const n=await labels.count().catch(()=>0);
+    for(let i=0;i<n;i++){const loc=labels.nth(i);if(await isVisible(loc)){await loc.click({force:true}).catch(()=>{});await pause(page,350);console.log(`[vueling] Equipaje facturado asignado al pasajero ${passenger}: ${full}.`);return;}}
+  }
   const tabs=page.getByRole('tab');const count=await tabs.count().catch(()=>0);if(count>=passenger){await tabs.nth(passenger-1).click({force:true});await pause(page,400);}
 }
-async function incrementBagDirection(row,labelPattern,count){
-  const label=row.getByText(labelPattern).first();
-  if(await isVisible(label)){
-    const group=label.locator('xpath=ancestor::*[self::div][.//button][1]');
-    for(let i=0;i<count;i++){
-      const enabled=group.locator('button:not([disabled])');const n=await enabled.count().catch(()=>0);if(!n)throw new Error(`No aparece el botón + para ${String(labelPattern)}.`);
-      await enabled.last().click({force:true});await new Promise(r=>setTimeout(r,300));
-    }
+async function setTouchCounter(counter,target,label){
+  const value=counter.locator('.value').first();
+  await value.waitFor({state:'visible',timeout:12000});
+  const read=async()=>Number.parseInt(String(await value.textContent().catch(()=>'' )).replace(/\D/g,''),10)||0;
+  let current=await read(),guard=0;
+  while(current!==target&&guard++<8){
+    const buttons=counter.locator('button');const n=await buttons.count().catch(()=>0);if(n<2)throw new Error(`No aparecen los controles +/- de ${label}.`);
+    const button=current<target?buttons.last():buttons.first();
+    await button.click({force:true,timeout:7000});await new Promise(r=>setTimeout(r,350));current=await read();
+  }
+  if(current!==target)throw new Error(`No se pudo dejar ${label} en ${target}; valor actual ${current}.`);
+}
+async function setBagDirectionCounters(page,row,outboundCount,returnCount){
+  const outbound=row.locator('.bags-selector--outbound touch-counter').first(),inbound=row.locator('.bags-selector--inbound touch-counter').first();
+  if(await isVisible(outbound)&&await isVisible(inbound)){
+    await setTouchCounter(outbound,outboundCount,'maleta IDA');
+    await setTouchCounter(inbound,returnCount,'maleta VUELTA');
     return true;
   }
-  return false;
-}
-async function incrementSingleBagCounter(row,count){
-  for(let i=0;i<count;i++){
-    const enabled=row.locator('button:not([disabled])');const n=await enabled.count().catch(()=>0);if(!n)throw new Error('No se encontró el botón + de la maleta.');
-    await enabled.last().click({force:true});await new Promise(r=>setTimeout(r,300));
+  // Fallback para la maquetación de escritorio: busca el bloque que contiene IDA/VUELTA y sus botones.
+  for(const [pattern,target,label] of [[/^IDA$/i,outboundCount,'maleta IDA'],[/^VUELTA$/i,returnCount,'maleta VUELTA']]){
+    const text=row.getByText(pattern).first();if(!(await isVisible(text)))return false;
+    const group=text.locator('xpath=ancestor::*[self::div][.//button][1]');
+    const value=group.locator('.value').first();let current=Number.parseInt(String(await value.textContent().catch(()=>'' )).replace(/\D/g,''),10)||0,guard=0;
+    while(current!==target&&guard++<8){const buttons=group.locator('button');const n=await buttons.count().catch(()=>0);if(n<2)throw new Error(`No aparecen los controles +/- de ${label}.`);await (current<target?buttons.last():buttons.first()).click({force:true});await new Promise(r=>setTimeout(r,300));current=Number.parseInt(String(await value.textContent().catch(()=>'' )).replace(/\D/g,''),10)||0;}
+    if(current!==target)throw new Error(`No se pudo dejar ${label} en ${target}.`);
   }
+  return true;
 }
 async function configureCheckedBaggage(page){
   const count=Math.max(0,Number(config.checkedBagCount)||0);if(!count){console.log('[vueling] Sin maleta facturada configurada.');return;}
   await ensureCheckedBaggageVisible(page);
   const adults=Math.max(1,Number(config.adults)||1);
-  if(adults>1)await setSwitchNearText(page,/Misma selección para todos/i,Boolean(config.sameBaggageAllPassengers),{index:1,label:'Misma selección para todos · equipaje facturado'});
+  // No usamos «Misma selección para todos»: la maleta pertenece al pasajero configurado.
+  if(adults>1)await setSwitchNearText(page,/Misma selección para todos/i,false,{index:0,label:'Misma selección para todos · equipaje facturado'}).catch(()=>false);
+  // Tampoco usamos el atajo «Mismo equipaje para ida y vuelta»: fijamos IDA y VUELTA por separado.
+  // Así el resultado es estable en la interfaz móvil y de escritorio de Vueling.
+  await setSwitchNearText(page,/Mismo equipaje para ida y vuelta/i,false,{index:0,label:'Mismo equipaje ida/vuelta'}).catch(()=>false);
   await selectPassengerForCheckedBag(page);
-  const roundToggle=page.getByText(/Mismo equipaje para ida y vuelta/i).first();const hasRoundToggle=await isVisible(roundToggle);
-  if(hasRoundToggle)await setSwitchNearText(page,/Mismo equipaje para ida y vuelta/i,Boolean(config.sameBaggageRoundTrip),{index:0,label:'Mismo equipaje ida/vuelta'});
-  const kg=Number(config.checkedBagKg)||25;const rowText=page.getByText(new RegExp(`MALETA DE\\s*${kg}\\s*KG`,'i')).first();await rowText.waitFor({state:'visible',timeout:15000});
-  const row=rowText.locator('xpath=ancestor::*[self::div or self::li][.//button][1]');
-  if(hasRoundToggle&&config.sameBaggageRoundTrip){await incrementSingleBagCounter(row,count);}
-  else{
-    const outboundDone=await incrementBagDirection(row,/^IDA$/i,count);
-    if(!outboundDone)await incrementSingleBagCounter(row,count);
-    if(config.sameBaggageRoundTrip){const returnDone=await incrementBagDirection(row,/^VUELTA$/i,count);if(!returnDone&&outboundDone)throw new Error('No aparece el contador de maleta para la vuelta.');}
-  }
-  const accept=page.getByRole('button',{name:/^ACEPTAR$/i}).last();if(await isVisible(accept)){await accept.click({force:true});await pause(page,550);}
-  console.log(`[vueling] Maleta ${kg} kg configurada · ${count} unidad(es) · pasajero ${config.checkedBagPassenger||1}${config.sameBaggageRoundTrip?' · ida y vuelta':''}.`);
+  const kg=Number(config.checkedBagKg)||25,weightPattern=new RegExp(`(?:MALETA DE\\s*)?${kg}\\s*KG`,'i');
+  let row=page.locator('bags-selector-distinct').filter({hasText:weightPattern}).first();
+  if(!(await isVisible(row))){const rowText=page.getByText(weightPattern).first();await rowText.waitFor({state:'visible',timeout:20000});row=rowText.locator('xpath=ancestor::*[self::div or self::li][.//button][1]');}
+  const inboundCount=config.sameBaggageRoundTrip?count:0;
+  if(!(await setBagDirectionCounters(page,row,count,inboundCount)))throw new Error(`No se pudieron localizar los contadores IDA/VUELTA para ${kg} kg.`);
+  await pause(page,700);
+  const body=await page.locator('body').innerText().catch(()=>'');
+  console.log(`[vueling] Maleta ${kg} kg seleccionada manualmente · IDA ${count} · VUELTA ${inboundCount} · pasajero ${config.checkedBagPassenger||1}. ${/Total maletas/i.test(body)?'Total actualizado.':''}`);
 }
+async function dismissExtraBagUpsell(page){
+  const dialog=page.locator('mat-dialog-container,.cdk-overlay-pane,[role="dialog"]').filter({hasText:/AÑADE AHORA UNA MALETA|¿Y SI NO TE CABE TODO EN TU EQUIPAJE DE MANO\?/i}).last();
+  if(!(await isVisible(dialog)))return false;
+  let skip=dialog.getByRole('button',{name:/CONTINUAR SIN AÑADIR MALETA/i}).first();
+  if(!(await isVisible(skip)))skip=dialog.getByText(/CONTINUAR SIN AÑADIR MALETA/i).first();
+  if(!(await isVisible(skip)))throw new Error('Apareció la oferta de otra maleta, pero no «Continuar sin añadir maleta».');
+  await skip.click({force:true,timeout:10000});await page.locator('.cdk-overlay-backdrop.cdk-overlay-backdrop-showing').waitFor({state:'hidden',timeout:15000}).catch(()=>{});await dialog.waitFor({state:'hidden',timeout:15000}).catch(()=>{});await pause(page,650);
+  console.log('[vueling] Oferta adicional de maleta descartada.');return true;
+}
+async function extrasPageActive(page){return /\/booking\/extras/i.test(String(page.url()||''))||await page.getByText(/PREFIERO CONTINUAR SIN ASEGURAR MI VIAJE|ASEGURA TU VIAJE|SIN SEGURO|PERSONALIZA TU VUELO|SERVICIOS ADICIONALES/i).first().isVisible().catch(()=>false);}
 async function continueFromLuggage(page){
-  const continueButton=page.getByRole('button',{name:/^CONTINUAR$/i}).last();await continueButton.waitFor({state:'visible',timeout:20000});await continueButton.scrollIntoViewIfNeeded().catch(()=>{});await continueButton.click({timeout:10000}).catch(()=>continueButton.click({force:true,timeout:5000}));
-  await page.getByText(/PERSONALIZA TU VUELO|ASEGURA TU VIAJE|SIN SEGURO/i).first().waitFor({state:'visible',timeout:60000});await pause(page,600);
+  // Tras añadir la maleta Vueling cambia el CTA a ACEPTAR/CONTINUAR. Nunca usamos «Continuar sin maletas».
+  let action=page.locator('footer-breakdown .cta button').filter({hasText:/^(?:\s*ACEPTAR\s*|\s*CONTINUAR\s*)$/i}).last();
+  if(!(await isVisible(action)))action=page.getByRole('button',{name:/^(?:ACEPTAR|CONTINUAR)$/i}).last();
+  if(!(await isVisible(action)))throw new Error('La maleta está configurada pero no aparece ACEPTAR/CONTINUAR en Equipaje facturado.');
+  await action.scrollIntoViewIfNeeded().catch(()=>{});await action.click({timeout:10000}).catch(()=>action.click({force:true,timeout:5000}));await pause(page,500);
+  const deadline=Date.now()+45000;
+  while(Date.now()<deadline){if(await dismissExtraBagUpsell(page))continue;if(await extrasPageActive(page)){console.log('[vueling] Equipaje confirmado; pantalla de Extras abierta.');return;}await pause(page,500);}
+  throw new Error('Vueling no avanzó de Equipaje facturado a Extras.');
 }
 async function selectNoInsuranceAndContinue(page){
-  await page.getByText(/ASEGURA TU VIAJE|SIN SEGURO/i).first().waitFor({state:'visible',timeout:60000});
-  const noInsurance=page.getByText(/^SIN SEGURO$/i).first();await noInsurance.scrollIntoViewIfNeeded().catch(()=>{});
-  let card=noInsurance.locator('xpath=ancestor::*[self::div or self::article or self::section][.//button][1]');
-  const selected=card.getByText(/Seleccionado/i).first();
-  if(!(await isVisible(selected))){
-    let zero=card.getByRole('button',{name:/0[,.]00\s*€/i}).first();
-    if(!(await isVisible(zero)))zero=card.getByText(/0[,.]00\s*€/i).last();
-    if(await isVisible(zero))await zero.click({force:true});else await card.click({force:true});
-    await pause(page,650);
+  await page.getByText(/PREFIERO CONTINUAR SIN ASEGURAR MI VIAJE|ASEGURA TU VIAJE|SIN SEGURO|PERSONALIZA TU VUELO/i).first().waitFor({state:'visible',timeout:70000});
+  // La interfaz móvil usa literalmente «Prefiero continuar sin asegurar mi viaje».
+  let noInsurance=page.getByText(/PREFIERO CONTINUAR SIN ASEGURAR MI VIAJE/i).first();
+  if(await isVisible(noInsurance)){
+    const host=noInsurance.locator('xpath=ancestor::*[self::label or self::div or self::section][.//input[@type="radio" or @type="checkbox"]][1]');
+    const input=host.locator('input[type="radio"],input[type="checkbox"]').first();
+    if(await isVisible(input))await input.check({force:true}).catch(()=>input.click({force:true}));else await noInsurance.click({force:true});
+  }else{
+    // Escritorio: tarjeta «SIN SEGURO».
+    noInsurance=page.getByText(/^SIN SEGURO$/i).first();await noInsurance.scrollIntoViewIfNeeded().catch(()=>{});
+    const card=noInsurance.locator('xpath=ancestor::*[self::div or self::article or self::section][1]');
+    const selected=card.getByText(/Seleccionado/i).first();
+    if(!(await isVisible(selected))){let zero=card.getByRole('button',{name:/0[,.]00\s*€/i}).first();if(!(await isVisible(zero)))zero=card.getByText(/0[,.]00\s*€/i).last();if(await isVisible(zero))await zero.click({force:true});else await card.click({force:true});}
   }
-  console.log('[vueling] Seguro: SIN SEGURO.');await snapshot(page,'08a-sin-seguro');
-  const continueButton=page.getByRole('button',{name:/^CONTINUAR$/i}).last();await continueButton.scrollIntoViewIfNeeded().catch(()=>{});await continueButton.click({timeout:10000}).catch(()=>continueButton.click({force:true,timeout:5000}));
-  await page.getByText(/ÚLTIMO PASO|ASÍ QUEDA TU VIAJE|¿CÓMO PREFIERES PAGAR\?/i).first().waitFor({state:'visible',timeout:70000});await pause(page,800);
+  await pause(page,700);console.log('[vueling] Seguro rechazado: continuar sin asegurar el viaje.');await snapshot(page,'08a-sin-seguro');
+  let continueButton=page.locator('footer-breakdown .cta button').filter({hasText:/CONTINUAR/i}).last();if(!(await isVisible(continueButton)))continueButton=page.getByRole('button',{name:/^CONTINUAR$/i}).last();
+  await continueButton.waitFor({state:'visible',timeout:20000});await continueButton.scrollIntoViewIfNeeded().catch(()=>{});await continueButton.click({timeout:10000}).catch(()=>continueButton.click({force:true,timeout:5000}));
+  await page.getByText(/ÚLTIMO PASO|ASÍ QUEDA TU VIAJE|¿CÓMO PREFIERES PAGAR\?/i).first().waitFor({state:'visible',timeout:80000});await pause(page,900);
+  console.log('[vueling] Pantalla final de pago alcanzada; no se introducirá ningún medio de pago.');
 }
 async function openFinalSummary(page){
   const already=page.getByText(/TOTAL IDA/i).first();if(await isVisible(already))return;
-  const header=page.locator('header').first();let trigger=header.getByRole('button').filter({hasText:/\d+[.,]\d{2}\s*€/}).last();
-  if(!(await isVisible(trigger)))trigger=page.getByRole('button').filter({hasText:/\d+[.,]\d{2}\s*€/}).first();
-  if(!(await isVisible(trigger))){const amount=page.getByText(/\d+[.,]\d{2}\s*€/).first();if(await isVisible(amount))trigger=amount;}
-  if(!(await isVisible(trigger)))throw new Error('No aparece el botón del total para abrir el desglose final.');
-  await trigger.click({force:true});await page.getByText(/TOTAL IDA/i).first().waitFor({state:'visible',timeout:15000});await pause(page,500);
+  // El desglose se abre desde el precio de la reserva. Según viewport puede ser una barra fija o una píldora superior.
+  const candidates=[
+    page.locator('footer-breakdown .breakdown-header .total').first(),
+    page.locator('footer-breakdown .toggle').first(),
+    page.locator('sb-breakdown .breakdown-header').first(),
+    page.locator('header button').filter({hasText:/\d+[.,]\d{2}\s*€/}).last(),
+    page.getByText(/TOTAL RESERVA/i).first(),
+    page.getByText(/\d+[.,]\d{2}\s*€/).first()
+  ];
+  let opened=false;
+  for(const trigger of candidates){if(!(await isVisible(trigger)))continue;await trigger.click({force:true,timeout:7000}).catch(()=>{});if(await page.getByText(/TOTAL IDA/i).first().isVisible().catch(()=>false)){opened=true;break;}await pause(page,450);}
+  if(!opened)await page.getByText(/TOTAL IDA/i).first().waitFor({state:'visible',timeout:15000}).catch(()=>{});
+  if(!(await page.getByText(/TOTAL IDA/i).first().isVisible().catch(()=>false)))throw new Error('No se pudo abrir el desglose del precio final desde «Total reserva».');
+  await pause(page,500);console.log('[vueling] Desglose final abierto desde el precio de la reserva.');
 }
-function moneyFromString(value=''){return euroNumber(String(value));}
-function labeledMoney(text,label){const m=String(text).match(new RegExp(`${label}\\s*([\\d.]+,\\d{2})\\s*€`,'i'));return m?moneyFromString(m[1]):0;}
-function baggageMoney(text){const matches=[...String(text).matchAll(/\d+\s+maletas?\s+facturadas?[^\n]*?([\d.]+,\d{2})\s*€|\d+\s+maleta\s+facturada[^\n]*?([\d.]+,\d{2})\s*€/gi)];if(!matches.length)return 0;return matches.reduce((sum,m)=>sum+moneyFromString(m[1]||m[2]||''),0);}
 async function waitForSummary(page){
   await openFinalSummary(page);const body=await page.locator('body').innerText();
   const total=labeledMoney(body,'(?:PRECIO TOTAL|TOTAL RESERVA)')||moneyFromString((body.match(/^\s*([\d.]+,\d{2})\s*€/m)||[])[1]||'');
