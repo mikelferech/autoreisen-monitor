@@ -1,4 +1,4 @@
-// MFE_AUTOREISEN_AUTOMATION_VERSION: 2.1.77
+// MFE_AUTOREISEN_AUTOMATION_VERSION: 2.2.13
 import {acceptCookies,clickFirst,daysBetween,fillFirst,isoNow,money,snapshot} from './lib.mjs';
 
 const MONTH_TOKENS={
@@ -155,6 +155,87 @@ async function fillModernForm(page,cfg){
   const pick=dateParts(cfg.pickupAt),drop=dateParts(cfg.dropoffAt);await fillFirst(page,[page.getByLabel(/recogida|pickup/i).first(),'input[name*="pickup" i]'],cfg.pickup);await fillFirst(page,[page.getByLabel(/devolución|devolucion|drop.?off|return/i).first(),'input[name*="drop" i],input[name*="return" i]'],cfg.dropoff);
   const dates=page.locator('input[type="date"]');if(await dates.count()>=2){await dates.nth(0).fill(pick.date).catch(()=>{});await dates.nth(1).fill(drop.date).catch(()=>{});}const times=page.locator('input[type="time"]');if(await times.count()>=2){await times.nth(0).fill(`${pick.hour}:${pick.minute}`).catch(()=>{});await times.nth(1).fill(`${drop.hour}:${drop.minute}`).catch(()=>{});}return clickFirst(page,[page.getByRole('button',{name:/buscar|consultar|ver precios|continuar|new quote/i}).first(),page.locator('button[type="submit"],input[type="submit"]').first()]);
 }
+function sameVehicle(row,config){
+  const wanted=modelTokens(config?.model||'');
+  const rowTokens=modelTokens(row?.model||'');
+  if(wanted.length&&wanted.every(token=>rowTokens.includes(token)||normalize(row?.model).includes(token)))return true;
+  const group=normalize(config?.group||'').replace(/\s+/g,'');
+  return Boolean(group)&&normalize(row?.group||'').replace(/\s+/g,'')===group;
+}
+function enrichFleetImage(fleet=[],config={},imageUrl=''){
+  const url=String(imageUrl||'').trim();if(!url)return fleet;
+  let used=false;return (Array.isArray(fleet)?fleet:[]).map(row=>{
+    if(!used&&sameVehicle(row,config)){used=true;return {...row,imageUrl:url};}
+    return row;
+  });
+}
+async function vehicleDomMeta(page,config={}){
+  return page.evaluate(({model,group})=>{
+    const norm=value=>String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+    const stop=new Set(['o','or','oder','ou','similar','similaire','similarer','similaren','similarmente','tsi','reference']);
+    const tokens=norm(model).split(' ').filter(x=>x.length>1&&!stop.has(x));
+    const groupText=norm(group).replace(/\s+/g,'');
+    const matchesText=text=>{
+      const n=norm(text);if(!n)return false;
+      if(tokens.length&&tokens.every(token=>n.includes(token)))return true;
+      if(groupText){const compact=n.replace(/\s+/g,'');if(compact.startsWith(groupText))return true;}
+      return false;
+    };
+    const badImage=/\b(?:ico|icon|logo|magnifier|lupa|facebook|twitter|youtube|instagram|spinner|loading|cookie|flag|bandera|mp3|air|ac-|puerta|plaza|direccion)\b/i;
+    const scoreImg=img=>{
+      const src=String(img.currentSrc||img.src||'').trim();if(!/^https?:/i.test(src)||badImage.test(src))return null;
+      const r=img.getBoundingClientRect();const w=Math.max(Number(img.naturalWidth)||0,r.width||0),h=Math.max(Number(img.naturalHeight)||0,r.height||0);
+      let score=Math.min(60,(w*h)/6000);if(w>=180&&h>=80)score+=35;if(w>h*1.2)score+=15;
+      const text=norm(`${img.alt||''} ${img.title||''} ${img.className||''} ${src}`);if(/coche|car|vehic|fleet|flota|arona|seat/.test(text))score+=35;
+      return {url:src,score};
+    };
+    const anchors=[...document.querySelectorAll('a[href*="lightbox01.php"],a[href*="lightbox" i]')];
+    const candidates=[];
+    for(const anchor of anchors){
+      let node=anchor,bestNode=null,bestText='';
+      for(let depth=0;node&&depth<9;depth++,node=node.parentElement){
+        const text=String(node.innerText||node.textContent||'').replace(/\s+/g,' ').trim();
+        if(matchesText(text)&&text.length<2600){bestNode=node;bestText=text;break;}
+      }
+      if(!bestNode)continue;
+      let image=null;for(const img of bestNode.querySelectorAll('img')){const row=scoreImg(img);if(row&&(!image||row.score>image.score))image=row;}
+      let score=1000-Math.min(700,bestText.length/3);if(tokens.length&&tokens.every(x=>norm(bestText).includes(x)))score+=250;if(/reservar|reserve|precio|día|dia/i.test(bestText))score+=80;if(image)score+=image.score;
+      candidates.push({score,lightboxUrl:String(anchor.href||''),directImageUrl:image?.url||''});
+    }
+    if(!candidates.length){
+      const nodes=[...document.querySelectorAll('h1,h2,h3,h4,strong,b,div,td,span,p')].filter(el=>matchesText(el.innerText||el.textContent||'')).sort((a,b)=>String(a.innerText||'').length-String(b.innerText||'').length).slice(0,25);
+      for(const start of nodes){
+        let node=start;
+        for(let depth=0;node&&depth<7;depth++,node=node.parentElement){
+          const text=String(node.innerText||node.textContent||'').replace(/\s+/g,' ').trim();if(text.length>3500)break;
+          const link=node.querySelector('a[href*="lightbox01.php"],a[href*="lightbox" i]');
+          let image=null;for(const img of node.querySelectorAll('img')){const row=scoreImg(img);if(row&&(!image||row.score>image.score))image=row;}
+          if(link||image){candidates.push({score:700-Math.min(500,text.length/4)+(image?.score||0),lightboxUrl:String(link?.href||''),directImageUrl:image?.url||''});break;}
+        }
+      }
+    }
+    candidates.sort((a,b)=>b.score-a.score);return candidates[0]||{lightboxUrl:'',directImageUrl:''};
+  },{model:String(config.model||''),group:String(config.group||'')}).catch(()=>({lightboxUrl:'',directImageUrl:''}));
+}
+async function bestVisualUrl(page){
+  return page.evaluate(()=>{
+    const bad=/\b(?:ico|icon|logo|magnifier|lupa|facebook|twitter|youtube|instagram|spinner|loading|cookie|flag|bandera|mp3|air|ac-|puerta|plaza|direccion)\b/i;
+    const rows=[];
+    const add=(url,w=0,h=0,text='')=>{try{const abs=new URL(String(url||''),location.href).href;if(!/^https?:/i.test(abs)||bad.test(abs))return;let score=Math.min(120,(Math.max(0,w)*Math.max(0,h))/5000);if(w>=250&&h>=120)score+=70;if(w>h*1.15)score+=25;if(/coche|car|vehic|fleet|flota|arona|seat/i.test(`${text} ${abs}`))score+=50;rows.push({url:abs,score});}catch{}};
+    for(const img of document.images){const r=img.getBoundingClientRect();add(img.currentSrc||img.src,Math.max(img.naturalWidth||0,r.width||0),Math.max(img.naturalHeight||0,r.height||0),`${img.alt||''} ${img.title||''} ${img.className||''}`);}
+    for(const el of document.querySelectorAll('*')){const r=el.getBoundingClientRect();if(r.width<180||r.height<80)continue;const bg=getComputedStyle(el).backgroundImage||'';const m=bg.match(/url\(["']?([^"')]+)["']?\)/i);if(m)add(m[1],r.width,r.height,`${el.className||''} ${el.id||''}`);}
+    rows.sort((a,b)=>b.score-a.score);return rows[0]?.url||'';
+  }).catch(()=>'');
+}
+async function selectedVehicleImage(page,config={}){
+  const meta=await vehicleDomMeta(page,config);if(meta.directImageUrl)return meta.directImageUrl;
+  if(!meta.lightboxUrl)return '';
+  const detail=await page.context().newPage();
+  try{
+    await detail.goto(meta.lightboxUrl,{waitUntil:'domcontentloaded',timeout:30000});await detail.waitForTimeout(1200);
+    return await bestVisualUrl(detail);
+  }catch{return '';}finally{await detail.close().catch(()=>{});}
+}
 function fleetFromLines(lines){const out=[],seen=new Set();for(const line of lines){const m=String(line).match(/^([A-Z0-9]{1,3})\s*[-–—:]\s*(.+?)(?:\s+([0-9]{1,4}(?:[.,][0-9]{1,2}))\s*€\s*\/\s*d[ií]a|$)/i);if(!m)continue;const group=m[1].trim(),model=m[2].trim().replace(/\s+/g,' ');if(!model||model.length>130)continue;const key=`${group}\u0000${normalize(model)}`;if(seen.has(key))continue;seen.add(key);out.push({group,model,carId:knownCarId(model)});}return out;}
 function parseResult(text,config){const lines=text.split(/\n+/).map(x=>x.trim()).filter(Boolean),index=targetIndex(lines,config),total=extractTotal(lines,index);return {lines,index,total,found:groupVehicleLines(lines,config.group),fleet:fleetFromLines(lines)};}
 async function diagnosticSummary(page,text,parsed,config){
@@ -175,14 +256,14 @@ export async function scanAutoReisenFleet(browser,config){
     if(/please wait|request is being verified|verifying|comprobando su navegador|un momento/i.test(text))throw new Error('AutoReisen activó la verificación anti-bot durante la consulta con navegador.');
     let parsed=parseResult(text,{...config,group:'',model:''});
     const validDates=resultsLookValid(text,config);
-    if(parsed.fleet.length&&validDates){await snapshot(page,'autoreisen-flota');return {source:'AutoReisen · flota real · GitHub Actions + Playwright',checkedAt:isoNow(),availability:'Disponible',pickupOfficeId:String(config.pickupOfficeId||officeId(config.pickup)||''),dropoffOfficeId:String(config.dropoffOfficeId||officeId(config.dropoff)||''),pickupAt:config.pickupAt,dropoffAt:config.dropoffAt,fleet:parsed.fleet};}
+    if(parsed.fleet.length&&validDates){const imageUrl=await selectedVehicleImage(page,config).catch(()=>'');const fleet=enrichFleetImage(parsed.fleet,config,imageUrl);await snapshot(page,'autoreisen-flota');return {source:'AutoReisen · flota real · GitHub Actions + Playwright',checkedAt:isoNow(),availability:'Disponible',pickupOfficeId:String(config.pickupOfficeId||officeId(config.pickup)||''),dropoffOfficeId:String(config.dropoffOfficeId||officeId(config.dropoff)||''),pickupAt:config.pickupAt,dropoffAt:config.dropoffAt,imageUrl,fleet};}
     if(/no hay nada disponible|no availability|cannot offer|no podemos ofrecer/i.test(text)&&validDates){await snapshot(page,'autoreisen-sin-disponibilidad');return {source:'AutoReisen · flota real · GitHub Actions + Playwright',checkedAt:isoNow(),availability:'No disponible',noAvailability:true,pickupOfficeId:String(config.pickupOfficeId||officeId(config.pickup)||''),dropoffOfficeId:String(config.dropoffOfficeId||officeId(config.dropoff)||''),pickupAt:config.pickupAt,dropoffAt:config.dropoffAt,fleet:[]};}
 
     // Segundo intento: URL de resultados sin fijar coche. Con Playwright puede funcionar aunque la misma URL falle desde un Worker.
     const direct=new URL(directResultUrl({...config,model:'',carId:''}));direct.searchParams.delete('coche');direct.searchParams.delete('id_coche');
     const opened=await openCandidate(page,direct.toString()).catch(()=>({text:'',challenge:false}));if(opened.challenge)throw new Error('AutoReisen activó su verificación anti-bot.');
     text=opened.text||await safeText(page);parsed=parseResult(text,{...config,group:'',model:''});
-    if(parsed.fleet.length&&resultsLookValid(text,config)){await snapshot(page,'autoreisen-flota-directa');return {source:'AutoReisen · flota real · GitHub Actions + Playwright',checkedAt:isoNow(),availability:'Disponible',pickupOfficeId:String(config.pickupOfficeId||officeId(config.pickup)||''),dropoffOfficeId:String(config.dropoffOfficeId||officeId(config.dropoff)||''),pickupAt:config.pickupAt,dropoffAt:config.dropoffAt,fleet:parsed.fleet};}
+    if(parsed.fleet.length&&resultsLookValid(text,config)){const imageUrl=await selectedVehicleImage(page,config).catch(()=>'');const fleet=enrichFleetImage(parsed.fleet,config,imageUrl);await snapshot(page,'autoreisen-flota-directa');return {source:'AutoReisen · flota real · GitHub Actions + Playwright',checkedAt:isoNow(),availability:'Disponible',pickupOfficeId:String(config.pickupOfficeId||officeId(config.pickup)||''),dropoffOfficeId:String(config.dropoffOfficeId||officeId(config.dropoff)||''),pickupAt:config.pickupAt,dropoffAt:config.dropoffAt,imageUrl,fleet};}
     const diag=await diagnosticSummary(page,text,parsed,config);throw new Error(`AutoReisen no devolvió una lista de vehículos interpretable para esta búsqueda. ${diag}`);
   }finally{await context.close();}
 }
@@ -192,13 +273,13 @@ export async function monitorAutoReisen(browser,config){
   try{
     // Strategy 1: use AutoReisen's public results query directly. This avoids fragile visual form selectors.
     const direct=directResultUrl(config);let opened=await openCandidate(page,direct).catch(()=>({text:'',challenge:false}));if(opened.challenge)opened={text:'',challenge:true};await acceptCookies(page);let text=opened.text||await safeText(page);let parsed=parseResult(text,config);
-    if(parsed.index>=0&&parsed.total&&resultsLookValid(text,config)){await snapshot(page,'autoreisen-resultados');const relevant=parsed.lines.slice(parsed.index,parsed.index+16).join(' '),days=daysBetween(config.pickupAt,config.dropoffAt);return {source:'AutoReisen · consulta directa · GitHub Actions + Playwright',checkedAt:isoNow(),price:parsed.total,total:parsed.total,pricePerDay:parsed.total/days,availability:/no disponible|agotado|sold out|not available/i.test(relevant)?'No disponible':'Disponible',group:config.group,model:config.model,carId:String(config.carId||knownCarId(config.model)||''),pickupOfficeId:String(config.pickupOfficeId||rec||''),dropoffOfficeId:String(config.dropoffOfficeId||dev||''),pickupAt:config.pickupAt,dropoffAt:config.dropoffAt,fleet:parsed.fleet};}
+    if(parsed.index>=0&&parsed.total&&resultsLookValid(text,config)){const imageUrl=await selectedVehicleImage(page,config).catch(()=>'');await snapshot(page,'autoreisen-resultados');const relevant=parsed.lines.slice(parsed.index,parsed.index+16).join(' '),days=daysBetween(config.pickupAt,config.dropoffAt),fleet=enrichFleetImage(parsed.fleet,config,imageUrl);return {source:'AutoReisen · consulta directa · GitHub Actions + Playwright',checkedAt:isoNow(),price:parsed.total,total:parsed.total,pricePerDay:parsed.total/days,availability:/no disponible|agotado|sold out|not available/i.test(relevant)?'No disponible':'Disponible',group:config.group,model:config.model,carId:String(config.carId||knownCarId(config.model)||''),pickupOfficeId:String(config.pickupOfficeId||officeId(config.pickup)||''),dropoffOfficeId:String(config.dropoffOfficeId||officeId(config.dropoff)||''),pickupAt:config.pickupAt,dropoffAt:config.dropoffAt,imageUrl,fleet};}
 
     // Strategy 2: fill the actual named legacy fields, not the first selects in the document.
     const base=resultsEntryUrl(process.env.AUTOREISEN_SEARCH_URL||config.searchUrl);await openCandidate(page,base).catch(()=>{});await acceptCookies(page);const intro=page.getByText(/^\s*Continuar\s*$/i).first();if(await intro.isVisible().catch(()=>false))await intro.click().catch(()=>{});await revealSearchForm(page);
     let submitted=await fillNamedLegacyForm(page,config).catch(()=>false);if(!submitted)submitted=await fillPositionalLegacyForm(page,config).catch(()=>false);if(!submitted)submitted=await fillModernForm(page,config).catch(()=>false);if(submitted){await page.waitForLoadState('domcontentloaded',{timeout:35000}).catch(()=>{});await page.waitForTimeout(4000);}text=await safeText(page);
     if(/please wait|request is being verified|verifying|comprobando su navegador|un momento/i.test(text))throw new Error('AutoReisen activó la verificación anti-bot durante la consulta.');parsed=parseResult(text,config);await snapshot(page,'autoreisen-resultados');
-    if(parsed.index>=0&&parsed.total&&resultsLookValid(text,config)){const relevant=parsed.lines.slice(parsed.index,parsed.index+16).join(' '),days=daysBetween(config.pickupAt,config.dropoffAt);return {source:'AutoReisen · formulario identificado · GitHub Actions + Playwright',checkedAt:isoNow(),price:parsed.total,total:parsed.total,pricePerDay:parsed.total/days,availability:/no disponible|agotado|sold out|not available/i.test(relevant)?'No disponible':'Disponible',group:config.group,model:config.model,carId:String(config.carId||knownCarId(config.model)||''),pickupOfficeId:String(config.pickupOfficeId||officeId(config.pickup)||''),dropoffOfficeId:String(config.dropoffOfficeId||officeId(config.dropoff)||''),pickupAt:config.pickupAt,dropoffAt:config.dropoffAt,fleet:parsed.fleet};}
+    if(parsed.index>=0&&parsed.total&&resultsLookValid(text,config)){const imageUrl=await selectedVehicleImage(page,config).catch(()=>''),relevant=parsed.lines.slice(parsed.index,parsed.index+16).join(' '),days=daysBetween(config.pickupAt,config.dropoffAt),fleet=enrichFleetImage(parsed.fleet,config,imageUrl);return {source:'AutoReisen · formulario identificado · GitHub Actions + Playwright',checkedAt:isoNow(),price:parsed.total,total:parsed.total,pricePerDay:parsed.total/days,availability:/no disponible|agotado|sold out|not available/i.test(relevant)?'No disponible':'Disponible',group:config.group,model:config.model,carId:String(config.carId||knownCarId(config.model)||''),pickupOfficeId:String(config.pickupOfficeId||officeId(config.pickup)||''),dropoffOfficeId:String(config.dropoffOfficeId||officeId(config.dropoff)||''),pickupAt:config.pickupAt,dropoffAt:config.dropoffAt,imageUrl,fleet};}
     const diag=await diagnosticSummary(page,text,parsed,config);
     if(parsed.index>=0&&parsed.total&&!rentalDurationAppears(text,config))throw new Error(`AutoReisen devolvió un precio para una duración distinta. MFE Viajes espera ${expectedRentalDays(config)} días (${dateParts(config.pickupAt).hour}:${dateParts(config.pickupAt).minute} → ${dateParts(config.dropoffAt).hour}:${dateParts(config.dropoffAt).minute}). ${diag}`);
     if(parsed.found.length)throw new Error(`AutoReisen devolvió resultados, pero no apareció ${config.model||`el grupo ${config.group}`}. ${diag}`);
@@ -206,4 +287,4 @@ export async function monitorAutoReisen(browser,config){
   }finally{await context.close();}
 }
 
-export const __autoreisenTest={resultsEntryUrl,directResultUrl,officeId,knownCarId,targetIndex,extractTotal,normalize,modelTokens,groupVehicleLines,resultsLookValid,dateParts,expectedRentalDays,rentalDurationAppears,fleetFromLines};
+export const __autoreisenTest={resultsEntryUrl,directResultUrl,officeId,knownCarId,targetIndex,extractTotal,normalize,modelTokens,groupVehicleLines,resultsLookValid,dateParts,expectedRentalDays,rentalDurationAppears,fleetFromLines,sameVehicle,enrichFleetImage};
