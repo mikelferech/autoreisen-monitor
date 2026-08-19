@@ -1,4 +1,4 @@
-// MFE_VUELING_AUTOMATION_VERSION: 1.0.12
+// MFE_VUELING_AUTOMATION_VERSION: 1.0.13
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
@@ -493,14 +493,26 @@ async function selectUnderseatInJourney(page,journey,label='trayecto'){
   // IMPORTANTE: no buscamos el texto genérico «1 pieza de equipaje de mano»,
   // porque ese mismo texto también aparece como descripción dentro de la opción
   // de 2 piezas. Seleccionamos únicamente el TÍTULO exacto de la tarjeta gratuita.
+  // El input nativo de Angular Material está deliberadamente oculto, por lo que
+  // isVisible(input) devuelve false aunque el radio circular sí esté en pantalla.
+  // Por eso trabajamos con el input mediante check({force:true}) y, como fallback,
+  // pulsamos el mat-radio-button / la fila completa.
   const title=journey.locator('.gcbg-option-title').filter({hasText:/^\s*1\s+pieza\s+de\s+equipaje\s+de\s+mano\s*$/i}).first();
-  await title.waitFor({state:'visible',timeout:18000});
+  await title.waitFor({state:'attached',timeout:18000});
   const row=title.locator('xpath=ancestor::div[contains(@class,"gcbg-option-row")][1]');
+  await row.waitFor({state:'attached',timeout:12000});
   const radio=row.locator('input[type="radio"]').first();
-  if(!(await isVisible(radio)))throw new Error(`No aparece el selector de «1 pieza bajo el asiento» para ${label}.`);
+  if(await radio.count()===0)throw new Error(`No aparece el selector de «1 pieza bajo el asiento» para ${label}.`);
   if(!(await radio.isChecked().catch(()=>false))){
-    await radio.check({force:true}).catch(()=>row.click({force:true}));
-    await pause(page,450);
+    let selected=false;
+    try{await radio.check({force:true,timeout:6000});selected=await radio.isChecked().catch(()=>false);}catch{}
+    if(!selected){
+      const matRadio=row.locator('mat-radio-button').first();
+      if(await matRadio.count())await matRadio.click({force:true,timeout:6000}).catch(()=>{});
+      else await row.click({force:true,timeout:6000}).catch(()=>{});
+    }
+    const deadline=Date.now()+7000;
+    while(Date.now()<deadline){if(await radio.isChecked().catch(()=>false))break;await pause(page,180);}
   }
   if(!(await radio.isChecked().catch(()=>false)))throw new Error(`No se pudo seleccionar la pieza bajo el asiento para ${label}.`);
 }
@@ -508,7 +520,10 @@ async function selectUnderseatForPassengerCard(page,card,passengerLabel){
   const header=card.locator('mat-expansion-panel-header').first();
   if(await isVisible(header)){
     const expanded=await header.getAttribute('aria-expanded').catch(()=>null);
-    if(expanded==='false'){await header.click({force:true});await pause(page,450);}
+    if(expanded==='false'){
+      await header.click({force:true}).catch(async()=>card.locator('.gcbg-pax-header').first().click({force:true}).catch(()=>{}));
+      await pause(page,500);
+    }
   }
   const journeys=card.locator('.gcbg-pax-content__journey');
   const count=await journeys.count().catch(()=>0);
