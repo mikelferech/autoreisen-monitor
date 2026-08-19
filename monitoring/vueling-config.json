@@ -15,6 +15,7 @@
     "infants": 0,
     "fare": "Fly Light / básica",
     "underseatBag": true,
+    "sameHandBaggageAllPassengers": true,
     "checkedBagKg": 25,
     "checkedBagCount": 1,
     "checkedBagPassenger": 1,
