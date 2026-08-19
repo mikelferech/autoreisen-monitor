@@ -1,4 +1,4 @@
-// MFE_VUELING_AUTOMATION_VERSION: 1.0.14
+// MFE_VUELING_AUTOMATION_VERSION: 1.0.15
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
@@ -686,15 +686,61 @@ async function dismissExtraBagUpsell(page){
   console.log('[vueling] Oferta adicional de maleta descartada.');return true;
 }
 async function extrasPageActive(page){return /\/booking\/extras/i.test(String(page.url()||''))||await page.getByText(/PREFIERO CONTINUAR SIN ASEGURAR MI VIAJE|ASEGURA TU VIAJE|SIN SEGURO|PERSONALIZA TU VUELO|SERVICIOS ADICIONALES/i).first().isVisible().catch(()=>false);}
+async function clickCheckedBagAcceptIfPresent(page){
+  // En la vista específica «Equipaje facturado» Vueling muestra primero ACEPTAR.
+  // Ese botón NO lleva todavía a Extras: vuelve a «Escoge tu equipaje» mostrando «Maletas añadidas».
+  let accept=page.locator('footer-breakdown .cta button').filter({hasText:/^\s*ACEPTAR\s*$/i}).last();
+  if(!(await isVisible(accept)))accept=page.getByRole('button',{name:/^ACEPTAR$/i}).last();
+  if(!(await isVisible(accept)))return false;
+  await accept.scrollIntoViewIfNeeded().catch(()=>{});
+  await accept.click({timeout:10000}).catch(()=>accept.click({force:true,timeout:5000}));
+  console.log('[vueling] Maleta facturada aceptada; regresando a la pantalla principal de equipaje.');
+  await pause(page,650);
+  return true;
+}
+async function clickMainLuggageContinueIfReady(page){
+  // Tras ACEPTAR la maleta, Vueling vuelve a «Escoge tu equipaje». Allí hay que pulsar CONTINUAR
+  // antes de que aparezca la oferta adicional «Añade ahora una maleta».
+  const added=page.getByText(/Maletas añadidas/i).first();
+  if(!(await isVisible(added)))return false;
+  let cont=page.locator('footer-breakdown .cta button').filter({hasText:/^\s*CONTINUAR\s*$/i}).last();
+  if(!(await isVisible(cont)))cont=page.getByRole('button',{name:/^CONTINUAR$/i}).last();
+  if(!(await isVisible(cont)))return false;
+  await cont.scrollIntoViewIfNeeded().catch(()=>{});
+  await cont.click({timeout:10000}).catch(()=>cont.click({force:true,timeout:5000}));
+  console.log('[vueling] Pantalla principal de equipaje confirmada; CONTINUAR pulsado.');
+  await pause(page,650);
+  return true;
+}
 async function continueFromLuggage(page){
-  // Tras añadir la maleta Vueling cambia el CTA a ACEPTAR/CONTINUAR. Nunca usamos «Continuar sin maletas».
-  let action=page.locator('footer-breakdown .cta button').filter({hasText:/^(?:\s*ACEPTAR\s*|\s*CONTINUAR\s*)$/i}).last();
-  if(!(await isVisible(action)))action=page.getByRole('button',{name:/^(?:ACEPTAR|CONTINUAR)$/i}).last();
-  if(!(await isVisible(action)))throw new Error('La maleta está configurada pero no aparece ACEPTAR/CONTINUAR en Equipaje facturado.');
-  await action.scrollIntoViewIfNeeded().catch(()=>{});await action.click({timeout:10000}).catch(()=>action.click({force:true,timeout:5000}));await pause(page,500);
-  const deadline=Date.now()+45000;
-  while(Date.now()<deadline){if(await dismissExtraBagUpsell(page))continue;if(await extrasPageActive(page)){console.log('[vueling] Equipaje confirmado; pantalla de Extras abierta.');return;}await pause(page,500);}
-  throw new Error('Vueling no avanzó de Equipaje facturado a Extras.');
+  // Flujo real observado en Vueling (diagnóstico 15):
+  // 1) ACEPTAR en «Equipaje facturado».
+  // 2) Regreso a «Escoge tu equipaje» con «Maletas añadidas».
+  // 3) CONTINUAR en el footer principal.
+  // 4) Popup de venta adicional -> «CONTINUAR SIN AÑADIR MALETA».
+  // 5) Extras.
+  const deadline=Date.now()+90000;let accepted=false,mainContinued=false,lastLog=0;
+  while(Date.now()<deadline){
+    if(await extrasPageActive(page)){console.log('[vueling] Equipaje confirmado; pantalla de Extras abierta.');return;}
+    if(await dismissExtraBagUpsell(page)){await snapshot(page,'07e-upsell-maleta-descartado').catch(()=>{});continue;}
+    if(!accepted){
+      accepted=await clickCheckedBagAcceptIfPresent(page);
+      if(accepted){await snapshot(page,'07c-maleta-aceptada').catch(()=>{});continue;}
+      // Si la ejecución ya estaba en la pantalla principal, consideramos ACEPTAR resuelto.
+      if(await isVisible(page.getByText(/Maletas añadidas/i).first()))accepted=true;
+    }
+    if(accepted&&!mainContinued){
+      mainContinued=await clickMainLuggageContinueIfReady(page);
+      if(mainContinued){await snapshot(page,'07d-equipaje-continuado').catch(()=>{});continue;}
+    }
+    if(Date.now()-lastLog>10000){
+      lastLog=Date.now();
+      const state=await page.locator('body').innerText().catch(()=>'');
+      console.log(`[vueling] Esperando transición Equipaje → Extras. ACEPTAR=${accepted?'sí':'no'} · CONTINUAR principal=${mainContinued?'sí':'no'} · maletas añadidas=${/Maletas añadidas/i.test(state)?'sí':'no'}.`);
+    }
+    await pause(page,500);
+  }
+  throw new Error(`Vueling no avanzó de Equipaje facturado a Extras. Estado: ACEPTAR=${accepted?'resuelto':'pendiente'}, CONTINUAR principal=${mainContinued?'pulsado':'pendiente'}.`);
 }
 async function selectNoInsuranceAndContinue(page){
   await page.getByText(/PREFIERO CONTINUAR SIN ASEGURAR MI VIAJE|ASEGURA TU VIAJE|SIN SEGURO|PERSONALIZA TU VUELO/i).first().waitFor({state:'visible',timeout:70000});
