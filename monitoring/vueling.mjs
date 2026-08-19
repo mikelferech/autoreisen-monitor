@@ -1,4 +1,4 @@
-// MFE_VUELING_AUTOMATION_VERSION: 1.0.0
+// MFE_VUELING_AUTOMATION_VERSION: 1.0.1
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
@@ -55,14 +55,71 @@ async function postResult(result){const {response,data}=await workerRequest({act
 async function readLatest(){const {response,data}=await workerRequest({action:'vueling'},{allowError:true});return response.ok?data?.result||null:null;}
 async function sendTelegram(text){const token=String(process.env.TELEGRAM_BOT_TOKEN||'').trim(),chatId=String(process.env.TELEGRAM_CHAT_ID||'').trim();if(!token||!chatId)throw new Error('Faltan TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID.');const response=await fetch(`https://api.telegram.org/bot${encodeURIComponent(token)}/sendMessage`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chat_id:chatId,text:String(text),disable_web_page_preview:true})});let data=null;try{data=await response.json();}catch{}if(!response.ok||data?.ok===false)throw new Error(data?.description||`Telegram HTTP ${response.status}`);}
 function buildVuelingDeeplink(c=config){const url=new URL('https://m.vueling.com/SB');url.searchParams.set('o',String(c.origin||'BIO').toUpperCase());url.searchParams.set('d',String(c.destination||'LPA').toUpperCase());url.searchParams.set('dd',c.departureDate);url.searchParams.set('rd',c.returnDate);url.searchParams.set('dt','0');url.searchParams.set('adt',String(Math.max(1,Number(c.adults)||1)));url.searchParams.set('chd',String(Math.max(0,Number(c.children)||0)));url.searchParams.set('inf',String(Math.max(0,Number(c.infants)||0)));url.searchParams.set('c','es-ES');url.searchParams.set('cur','EUR');if(c.outboundFlight)url.searchParams.set('ofn',String(c.outboundFlight).toUpperCase());if(c.returnFlight)url.searchParams.set('rfn',String(c.returnFlight).toUpperCase());return url.toString();}
-async function acceptCookies(page){await clickFirst(page,[page.getByRole('button',{name:/aceptar todas|aceptar todo|aceptar cookies|aceptar/i}),page.locator('#onetrust-accept-btn-handler')]);}
+async function acceptCookies(page){
+  const accept=page.locator('#onetrust-accept-btn-handler').first();
+  try{await accept.waitFor({state:'visible',timeout:15000});await accept.click({timeout:8000});await page.locator('#onetrust-banner-sdk').waitFor({state:'hidden',timeout:12000}).catch(()=>{});await pause(page,900);console.log('[vueling] Cookies aceptadas.');return true;}catch{}
+  const fallback=page.getByRole('button',{name:/OK,?\s*las acepto|Aceptar todas las cookies|Aceptar todas|Acepto/i}).first();
+  if(await isVisible(fallback)){await fallback.click({force:true,timeout:8000});await pause(page,900);console.log('[vueling] Cookies aceptadas por fallback.');return true;}
+  console.warn('[vueling] No apareció el banner de cookies o ya estaba resuelto.');return false;
+}
 async function applyDirectOnlyIfNeeded(page){if(!config.directOnly||config.outboundFlight||config.returnFlight)return;await checkLabel(page,/Solo vuelos directos/i,true);}
-async function assertFlightSelection(page){const body=await page.locator('body').innerText();for(const value of [config.outboundFlight,config.returnFlight])if(value&&!new RegExp(String(value).replace(/\s+/g,'\\s*'),'i').test(body))console.warn(`[vueling] El número ${value} todavía no aparece en el DOM; el deeplink puede haberlo preseleccionado para el siguiente paso.`);}
+async function pageLooksLikeFlightResults(page){
+  const url=String(page.url()||'');if(/tickets\.vueling\.com\/booking\/selectFlight/i.test(url))return true;
+  return await page.getByText(/SELECCIONA TU VUELO|Selecciona tu vuelo/i).first().isVisible().catch(()=>false);
+}
+async function waitForFlightResultsPage(context,originPage,{timeoutMs=50000}={}){
+  const deadline=Date.now()+timeoutMs;let searchClicked=false;
+  while(Date.now()<deadline){
+    for(const candidate of context.pages()){
+      if(candidate.isClosed())continue;
+      if(await pageLooksLikeFlightResults(candidate)){await candidate.bringToFront().catch(()=>{});await candidate.waitForLoadState('domcontentloaded',{timeout:10000}).catch(()=>{});console.log(`[vueling] Resultados detectados en ${candidate.url()}`);return candidate;}
+    }
+    if(!searchClicked&&originPage&&!originPage.isClosed()){
+      const searchButton=originPage.getByRole('button',{name:/^BUSCAR$|Buscar vuelos|Buscar/i}).first();
+      if(await isVisible(searchButton)){
+        searchClicked=true;console.log('[vueling] La búsqueda requiere pulsar BUSCAR; esperando la pestaña de resultados.');
+        await searchButton.click({force:true}).catch(()=>{});await pause(originPage,900);
+      }
+    }
+    await new Promise(resolve=>setTimeout(resolve,700));
+  }
+  const urls=context.pages().filter(x=>!x.isClosed()).map(x=>x.url()).join(' | ');
+  throw new Error(`No apareció la pestaña de resultados de Vueling. Páginas abiertas: ${urls||'ninguna'}.`);
+}
+async function assertFlightSelection(page){const body=await page.locator('body').innerText();for(const value of [config.outboundFlight,config.returnFlight])if(value&&!new RegExp(String(value).replace(/\s+/g,'\\s*'),'i').test(body))console.warn(`[vueling] El número ${value} todavía no aparece en el DOM.`);}
+function flightPattern(value){return new RegExp(String(value||'').trim().replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'i');}
+async function selectFlight(page,{flight,time,label}){
+  const flightRe=flightPattern(flight),timeRe=flightPattern(time);
+  const flightText=page.getByText(flightRe).first();
+  await flightText.waitFor({state:'visible',timeout:35000}).catch(()=>{});
+  if(!(await isVisible(flightText)))throw new Error(`No aparece ${label} ${flight}${time?` a las ${time}`:''}.`);
+  let card=null,cardText='';let node=flightText;
+  for(let depth=0;depth<10;depth++){
+    node=node.locator('xpath=..');const txt=await node.innerText().catch(()=>'');if(time&&!timeRe.test(txt))continue;
+    const priced=node.getByRole('button').filter({hasText:/\d+(?:[.,]\d{1,2})?\s*€|seleccionar|elegir/i});const pricedCount=await priced.count().catch(()=>0);
+    if(pricedCount===1){card=node;cardText=txt;break;}
+  }
+  if(!card){
+    const candidates=page.locator('article, li, section, div').filter({hasText:flightRe});const count=Math.min(await candidates.count().catch(()=>0),80);
+    for(let i=0;i<count;i++){const c=candidates.nth(i),txt=await c.innerText().catch(()=>'');if(time&&!timeRe.test(txt))continue;const priced=c.getByRole('button').filter({hasText:/\d+(?:[.,]\d{1,2})?\s*€|seleccionar|elegir/i});if(await priced.count().catch(()=>0)===1){card=c;cardText=txt;break;}}
+  }
+  if(!card)throw new Error(`No se pudo aislar la tarjeta de ${label} ${flight}${time?` ${time}`:''}.`);
+  if(time&&!timeRe.test(cardText))throw new Error(`${label} ${flight} apareció, pero no se confirmó el horario ${time}.`);
+  const priceButton=card.getByRole('button').filter({hasText:/\d+(?:[.,]\d{1,2})?\s*€|seleccionar|elegir/i}).last();
+  const button=await isVisible(priceButton)?priceButton:card.locator('button').last();
+  if(!(await isVisible(button)))throw new Error(`No se encontró el botón de precio para ${label} ${flight}.`);
+  await button.scrollIntoViewIfNeeded().catch(()=>{});await button.click({timeout:10000}).catch(()=>button.click({force:true,timeout:5000}));await pause(page,1200);
+  console.log(`[vueling] Seleccionado ${label}: ${flight} ${time||''}`.trim());
+}
+async function selectRequestedFlights(page){
+  await selectFlight(page,{flight:config.outboundFlight,time:config.outboundTime,label:'vuelo de ida'});await snapshot(page,'02-ida-seleccionada');
+  await selectFlight(page,{flight:config.returnFlight,time:config.returnTime,label:'vuelo de vuelta'});await snapshot(page,'03-vuelta-seleccionada');
+}
 async function selectFlyLight(page){
-  const title=page.getByText(/FLY\s*LIGHT/i).first();if(!(await isVisible(title)))throw new Error('No aparece la tarifa FLY LIGHT.');
+  const title=page.getByText(/FLY\s*LIGHT/i).first();await title.waitFor({state:'visible',timeout:35000}).catch(()=>{});if(!(await isVisible(title)))throw new Error('No aparece la tarifa FLY LIGHT después de seleccionar ida y vuelta.');
   const card=title.locator('xpath=ancestor::*[self::article or self::section or self::div][.//button][1]');
   const button=card.getByRole('button').filter({hasText:/0[,.]00|€|seleccionar|elegir/i}).last();
-  if(await isVisible(button)){await button.click();await pause(page);return;}
+  if(await isVisible(button)){await button.click();await pause(page,1200);return;}
   if(!(await clickFirst(page,[title],{required:true,label:'tarifa FLY LIGHT'})))throw new Error('No se pudo seleccionar FLY LIGHT.');
 }
 async function continueAsGuest(page){await clickFirst(page,[page.getByRole('button',{name:/continuar como invitado|seguir como invitado|invitado/i}),page.getByText(/continuar como invitado/i)],{});}
@@ -126,13 +183,14 @@ async function waitForSummary(page){
   const tolerance=.05;if(outbound>0&&returnPrice>0&&Math.abs(total-(outbound+returnPrice+services))>tolerance)console.warn('[vueling] El desglose no suma exactamente el total. Se guardará con advertencia.');
   return {total,outbound,return:returnPrice,baggage:services,services};
 }
-async function monitorVueling(page){
-  const deeplink=buildVuelingDeeplink();await page.goto(deeplink,{waitUntil:'domcontentloaded',timeout:60000});await pause(page,1400);await acceptCookies(page);await applyDirectOnlyIfNeeded(page);await snapshot(page,'01-deeplink-vuelos');await assertFlightSelection(page);
-  await selectFlyLight(page);await snapshot(page,'02-fly-light');await continueAsGuest(page);
-  await fillContactAndPassengers(page);await snapshot(page,'03-pasajeros');
-  await skipSeatsAndExtras(page);await snapshot(page,'04-sin-asientos');
-  await chooseUnderseatBag(page);await openCheckedBaggage(page);await snapshot(page,'05-equipaje');
-  await configureCheckedBaggage(page);const prices=await waitForSummary(page);await snapshot(page,'06-resumen-final');
+async function monitorVueling(context,page){
+  const deeplink=buildVuelingDeeplink();await page.goto(deeplink,{waitUntil:'domcontentloaded',timeout:60000});await pause(page,1200);await snapshot(page,'01a-antes-cookies');await acceptCookies(page);await snapshot(page,'01b-despues-cookies');
+  page=await waitForFlightResultsPage(context,page);await acceptCookies(page);await applyDirectOnlyIfNeeded(page);await snapshot(page,'01c-resultados-vuelos');await assertFlightSelection(page);await selectRequestedFlights(page);
+  await selectFlyLight(page);await snapshot(page,'04-fly-light');await continueAsGuest(page);
+  await fillContactAndPassengers(page);await snapshot(page,'05-pasajeros');
+  await skipSeatsAndExtras(page);await snapshot(page,'06-sin-asientos');
+  await chooseUnderseatBag(page);await openCheckedBaggage(page);await snapshot(page,'07-equipaje');
+  await configureCheckedBaggage(page);const prices=await waitForSummary(page);await snapshot(page,'08-resumen-final');
   const body=await page.locator('body').innerText();
   const outboundOk=!config.outboundFlight||new RegExp(config.outboundFlight,'i').test(body),returnOk=!config.returnFlight||new RegExp(config.returnFlight,'i').test(body);
   const outboundTimeOk=!config.outboundTime||new RegExp(String(config.outboundTime).replace(':','[:h]'),'i').test(body),returnTimeOk=!config.returnTime||new RegExp(String(config.returnTime).replace(':','[:h]'),'i').test(body);
@@ -148,7 +206,7 @@ try{browser=await chromium.launch({headless:true,channel:'chrome'});}catch{brows
 const context=await browser.newContext({locale:'es-ES',viewport:{width:430,height:932},isMobile:true,hasTouch:true,userAgent:'Mozilla/5.0 (Linux; Android 16; MFE Viajes Monitor) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136 Mobile Safari/537.36'});
 const page=await context.newPage();
 try{
-  const result=await monitorVueling(page);await postResult(result);
+  const result=await monitorVueling(context,page);await postResult(result);
   if(config.telegramEnabled){const prior=Number(previous?.total)||0;const delta=prior?result.total-prior:0,drop=prior>0&&result.total<prior;const notify=Boolean(config.telegramNotifyEveryCheck)||(Boolean(config.telegramNotifyPriceDrop)&&drop);if(notify)await sendTelegram(`✈️ Vueling · MFE Viajes\n${config.outboundFlight} ${config.origin}→${config.destination} · ${config.returnFlight} ${config.destination}→${config.origin}\nIda: ${moneyText(result.outbound)}\nVuelta: ${moneyText(result.return)}\nMaleta/servicios: ${moneyText(result.baggage)}\nTOTAL: ${moneyText(result.total)}${prior?`\nCambio: ${delta>=0?'+':''}${moneyText(delta)}`:''}`);}
   console.log('[vueling] OK',JSON.stringify(result));
 }catch(error){const result={ok:false,status:'error',error:error?.message||String(error),checkedAt:new Date().toISOString(),source:'Vueling · GitHub Actions + Playwright'};console.error('[vueling] ERROR',error);await snapshot(page,'99-error').catch(()=>{});await postResult(result).catch(e=>console.error('No se pudo guardar el error:',e.message));if(config.telegramEnabled)await sendTelegram(`🔴 Vueling · error del monitor\n${result.error}`).catch(()=>{});process.exitCode=1;
