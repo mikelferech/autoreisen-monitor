@@ -1,4 +1,4 @@
-// MFE_VUELING_AUTOMATION_VERSION: 1.0.2
+// MFE_VUELING_AUTOMATION_VERSION: 1.0.3
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
@@ -67,14 +67,20 @@ async function pageLooksLikeFlightResults(page){
   const url=String(page.url()||'');if(/tickets\.vueling\.com\/booking\/selectFlight/i.test(url))return true;
   return await page.getByText(/SELECCIONA TU VUELO|Selecciona tu vuelo/i).first().isVisible().catch(()=>false);
 }
-async function pageLooksLikePreselectedItinerary(page){
-  const body=await page.locator('body').innerText().catch(()=>'');
-  if(!/Tu vuelo a|Modificar/i.test(body)||!/Continuar/i.test(body))return false;
+function preselectedTextMatches(body=''){
+  const text=String(body||'');
+  if(!/Tu vuelo a|Modificar/i.test(text)||!/Continuar/i.test(text))return false;
   const required=[config.outboundFlight,config.returnFlight,config.outboundTime,config.returnTime].filter(Boolean);
-  return required.every(value=>flightPattern(value).test(body));
+  return required.every(value=>flightPattern(value).test(text));
+}
+async function pageLooksLikePreselectedItinerary(page){
+  // textContent detecta el itinerario en cuanto Angular lo inserta en el DOM, incluso antes de que
+  // todos los bloques hayan terminado su animación/maquetación visible.
+  const body=await page.locator('body').textContent().catch(()=>'');
+  return preselectedTextMatches(body);
 }
 async function verifyPreselectedItinerary(page){
-  const body=await page.locator('body').innerText().catch(()=>'');
+  const body=await page.locator('body').textContent().catch(()=>'');
   const checks=[
     ['vuelo de ida',config.outboundFlight],['hora de ida',config.outboundTime],
     ['vuelo de vuelta',config.returnFlight],['hora de vuelta',config.returnTime]
@@ -83,8 +89,8 @@ async function verifyPreselectedItinerary(page){
   if(missing.length)throw new Error(`El deeplink abrió un itinerario distinto al configurado. Falta confirmar: ${missing.join(', ')}.`);
   console.log(`[vueling] Itinerario preseleccionado confirmado: ${config.outboundFlight} ${config.outboundTime} / ${config.returnFlight} ${config.returnTime}.`);
 }
-async function waitForVuelingEntryPage(context,originPage,{timeoutMs=50000}={}){
-  const deadline=Date.now()+timeoutMs;let searchClicked=false;
+async function waitForVuelingEntryPage(context,originPage,{timeoutMs=130000}={}){
+  const startedAt=Date.now(),deadline=startedAt+timeoutMs;let searchClicked=false,lastProgressLog=0;
   while(Date.now()<deadline){
     for(const candidate of context.pages()){
       if(candidate.isClosed())continue;
@@ -93,7 +99,14 @@ async function waitForVuelingEntryPage(context,originPage,{timeoutMs=50000}={}){
         console.log(`[vueling] Pantalla de resultados detectada en ${candidate.url()}`);return {page:candidate,mode:'results'};
       }
       if(await pageLooksLikePreselectedItinerary(candidate)){
-        await candidate.bringToFront().catch(()=>{});console.log(`[vueling] El deeplink ya ha preseleccionado ida y vuelta en ${candidate.url()}`);return {page:candidate,mode:'preselected'};
+        await candidate.bringToFront().catch(()=>{});console.log(`[vueling] El deeplink ya ha preseleccionado ida y vuelta en ${candidate.url()} tras ${Math.round((Date.now()-startedAt)/1000)} s.`);return {page:candidate,mode:'preselected'};
+      }
+      const url=String(candidate.url()||'');
+      if(/m\.vueling\.com\/SB\/YourFlight/i.test(url)&&Date.now()-lastProgressLog>15000){
+        lastProgressLog=Date.now();
+        const body=await candidate.locator('body').textContent().catch(()=>'');
+        const found=[config.outboundFlight,config.returnFlight,config.outboundTime,config.returnTime].filter(v=>v&&flightPattern(v).test(body));
+        console.log(`[vueling] Esperando a que Angular complete YourFlight (${Math.round((Date.now()-startedAt)/1000)} s). Detectado: ${found.join(', ')||'todavía nada'}.`);
       }
     }
     if(!searchClicked&&originPage&&!originPage.isClosed()){
@@ -103,12 +116,12 @@ async function waitForVuelingEntryPage(context,originPage,{timeoutMs=50000}={}){
         await searchButton.click({force:true}).catch(()=>{});await pause(originPage,900);
       }
     }
-    await new Promise(resolve=>setTimeout(resolve,650));
+    await new Promise(resolve=>setTimeout(resolve,800));
   }
   const urls=context.pages().filter(x=>!x.isClosed()).map(x=>x.url()).join(' | ');
-  throw new Error(`No apareció ni la selección de vuelos ni el itinerario preseleccionado de Vueling. Páginas abiertas: ${urls||'ninguna'}.`);
+  throw new Error(`No apareció ni la selección de vuelos ni el itinerario preseleccionado de Vueling tras ${Math.round(timeoutMs/1000)} s. Páginas abiertas: ${urls||'ninguna'}.`);
 }
-async function waitForFarePage(context,currentPage,{timeoutMs=45000}={}){
+async function waitForFarePage(context,currentPage,{timeoutMs=120000}={}){
   const deadline=Date.now()+timeoutMs;
   while(Date.now()<deadline){
     for(const candidate of context.pages()){
@@ -223,7 +236,9 @@ async function monitorVueling(context,page){
   const entry=await waitForVuelingEntryPage(context,page);page=entry.page;await acceptCookies(page);
   if(entry.mode==='preselected'){
     await verifyPreselectedItinerary(page);await snapshot(page,'01c-itinerario-preseleccionado');
-    await clickFirst(page,[page.getByRole('button',{name:/^CONTINUAR$|^Continuar$/i})],{required:true,label:'Continuar desde el itinerario preseleccionado'});
+    const continueButton=page.getByRole('button',{name:/^CONTINUAR$|^Continuar$/i}).first();
+    await continueButton.waitFor({state:'visible',timeout:30000});
+    await continueButton.scrollIntoViewIfNeeded().catch(()=>{});await continueButton.click({timeout:10000}).catch(()=>continueButton.click({force:true,timeout:5000}));await pause(page,1200);
     await snapshot(page,'02-itinerario-confirmado');
   }else{
     await applyDirectOnlyIfNeeded(page);await snapshot(page,'01c-resultados-vuelos');await assertFlightSelection(page);await selectRequestedFlights(page);
