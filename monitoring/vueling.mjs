@@ -1,4 +1,4 @@
-// MFE_VUELING_AUTOMATION_VERSION: 1.0.7
+// MFE_VUELING_AUTOMATION_VERSION: 1.0.8
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
@@ -342,6 +342,60 @@ async function chooseAutocompleteValue(page,panel,fieldPattern,value,label){
   throw new Error(`No apareció la opción ${label}: ${value}. Valor actual: ${finalValue||'vacío'}.`);
 }
 
+async function privacyPolicyDialogActive(page){
+  const dialog=page.locator('vy-privacy-policy-dialog').first();
+  if(await isVisible(dialog))return true;
+  return await page.getByText(/^\s*POLÍTICA DE PRIVACIDAD\s*$/i).first().isVisible().catch(()=>false);
+}
+async function acceptPrivacyPolicyIfPresent(page,{timeoutMs=6000,required=false}={}){
+  const dialog=page.locator('vy-privacy-policy-dialog').first();
+  try{await dialog.waitFor({state:'visible',timeout:timeoutMs});}catch{
+    if(!(await privacyPolicyDialogActive(page))){if(required)throw new Error('No apareció el diálogo «Política de privacidad».');return false;}
+  }
+  const shell=page.locator('vy-dialog').filter({has:page.locator('vy-privacy-policy-dialog')}).first();
+  const accept=(await isVisible(shell))?shell.getByRole('button',{name:/^\s*Aceptar\s*$/i}).last():page.getByRole('button',{name:/^\s*Aceptar\s*$/i}).last();
+  if(!(await isVisible(accept))){if(required)throw new Error('Apareció «Política de privacidad», pero no se encontró el botón ACEPTAR.');return false;}
+  await accept.scrollIntoViewIfNeeded().catch(()=>{});
+  await accept.click({timeout:8000}).catch(()=>accept.click({force:true,timeout:4000}));
+  await dialog.waitFor({state:'hidden',timeout:12000}).catch(()=>{});
+  await page.locator('.cdk-overlay-backdrop-showing').waitFor({state:'hidden',timeout:12000}).catch(()=>{});
+  await pause(page,500);
+  console.log('[vueling] Política de privacidad aceptada.');
+  return true;
+}
+async function continueAfterContact(page){
+  await ensureGuestAccessClosed(page,{required:true});
+  await acceptPrivacyPolicyIfPresent(page,{timeoutMs:1200});
+  let continueButton=page.getByRole('button',{name:/^CONTINUAR$|^Continuar$/i}).last();
+  if(!(await isVisible(continueButton)))throw new Error('No aparece CONTINUAR después de completar pasajeros y contacto.');
+  await continueButton.scrollIntoViewIfNeeded().catch(()=>{});
+  try{await continueButton.click({timeout:10000});}
+  catch{
+    await ensureGuestAccessClosed(page,{required:true});
+    await acceptPrivacyPolicyIfPresent(page,{timeoutMs:1200});
+    await continueButton.click({force:true,timeout:6000});
+  }
+  // Vueling abre aquí un diálogo obligatorio de Política de privacidad. El clic en CONTINUAR
+  // puede considerarse correcto antes de que Angular inserte el overlay, así que lo esperamos
+  // expresamente y lo aceptamos si aparece.
+  const privacyAccepted=await acceptPrivacyPolicyIfPresent(page,{timeoutMs:7000});
+  if(privacyAccepted){
+    await snapshot(page,'05d-privacidad-aceptada');
+    await pause(page,700);
+    // Algunas variantes siguen automáticamente; otras permanecen en Datos y requieren un
+    // segundo CONTINUAR después de aceptar la política.
+    const contactStillVisible=await page.locator('vy-contact-form-panel').first().isVisible().catch(()=>false);
+    if(contactStillVisible){
+      continueButton=page.getByRole('button',{name:/^CONTINUAR$|^Continuar$/i}).last();
+      if(await isVisible(continueButton)){
+        await continueButton.scrollIntoViewIfNeeded().catch(()=>{});
+        await continueButton.click({timeout:10000}).catch(()=>continueButton.click({force:true,timeout:5000}));
+      }
+    }
+  }
+  await pause(page,900);
+}
+
 async function fillContactAndPassengers(page){
   await ensureGuestAccessClosed(page);
   const adults=Math.max(1,Number(config.adults)||1);
@@ -383,19 +437,8 @@ async function fillContactAndPassengers(page){
       else await box.uncheck({force:true}).catch(()=>{});
     }
   }
-  await checkLabel(page,/política de privacidad|acepto.*condiciones|he leído.*privacidad/i,true);
   await snapshot(page,'05c-contacto-rellenado');
-
-  await ensureGuestAccessClosed(page,{required:true});
-  const continueButton=page.getByRole('button',{name:/^CONTINUAR$|^Continuar$/i}).last();
-  if(!(await isVisible(continueButton)))throw new Error('No aparece CONTINUAR después de completar pasajeros y contacto.');
-  await continueButton.scrollIntoViewIfNeeded().catch(()=>{});
-  try{await continueButton.click({timeout:10000});}
-  catch{
-    await ensureGuestAccessClosed(page,{required:true});
-    await continueButton.click({force:true,timeout:6000});
-  }
-  await pause(page,900);
+  await continueAfterContact(page);
 }
 
 async function skipSeatsAndExtras(page){
