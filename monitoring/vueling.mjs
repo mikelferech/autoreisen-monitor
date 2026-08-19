@@ -1,4 +1,4 @@
-// MFE_VUELING_AUTOMATION_VERSION: 1.0.17
+// MFE_VUELING_AUTOMATION_VERSION: 1.0.18
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
@@ -29,6 +29,21 @@ function euroNumber(text=''){
   return Number.parseFloat(value)||0;
 }
 function moneyText(value){return new Intl.NumberFormat('es-ES',{style:'currency',currency:'EUR'}).format(Number(value)||0);}
+function moneyFromString(text=''){return euroNumber(text);}
+function labeledMoney(text,labelPattern){
+  const source=String(text||'').replace(/\u00a0/g,' ');
+  const re=new RegExp(`(?:${labelPattern})\\s*([\\d.]+,\\d{2})\\s*€`,'i');
+  const match=source.match(re);return match?euroNumber(match[1]):0;
+}
+function baggageMoney(text=''){
+  const source=String(text||'').replace(/\u00a0/g,' ');
+  const patterns=[
+    /(?:maletas?\s+facturadas?|equipaje\s+facturado)[\s\S]{0,140}?([\d.]+,\d{2})\s*€/gi,
+    /(?:maleta\s+de\s+\d+\s*kg)[\s\S]{0,140}?([\d.]+,\d{2})\s*€/gi
+  ];
+  let total=0;for(const pattern of patterns){const values=[...source.matchAll(pattern)].map(m=>euroNumber(m[1])).filter(v=>v>0);if(values.length){total=values.reduce((a,b)=>a+b,0);break;}}
+  return total;
+}
 async function ensureArtifacts(){await fs.mkdir(ARTIFACTS,{recursive:true});}
 async function snapshot(page,name){await ensureArtifacts();await page.screenshot({path:path.join(ARTIFACTS,`${name}.png`),fullPage:true}).catch(()=>{});await fs.writeFile(path.join(ARTIFACTS,`${name}.html`),await page.content().catch(()=>''),'utf8').catch(()=>{});}
 async function pause(page,ms=900){await page.waitForTimeout(ms);}
@@ -852,25 +867,48 @@ async function selectNoInsuranceAndContinue(page){
   await pause(page,900);
   console.log('[vueling] Pantalla final de pago alcanzada; no se introducirá ningún medio de pago.');
 }
+async function finalSummaryDomText(page){
+  // En la pantalla de Pago Vueling ya inserta <booking-breakdown> completo en el DOM aunque el panel
+  // «Detalles de tu reserva» siga visualmente colapsado. textContent permite leer ese desglose sin
+  // hacer ningún clic adicional ni depender de animaciones/overlays del footer.
+  const breakdown=page.locator('booking-breakdown').first();
+  if(await breakdown.count().catch(()=>0)){
+    const text=String(await breakdown.textContent().catch(()=>'')).replace(/\u00a0/g,' ');
+    if(/TOTAL IDA/i.test(text)&&/TOTAL VUELTA/i.test(text)&&/(?:PRECIO TOTAL|TOTAL RESERVA)/i.test(text))return text;
+  }
+  const footer=page.locator('footer-breakdown').first();
+  if(await footer.count().catch(()=>0)){
+    const text=String(await footer.textContent().catch(()=>'')).replace(/\u00a0/g,' ');
+    if(/TOTAL IDA/i.test(text)&&/TOTAL VUELTA/i.test(text)&&/(?:PRECIO TOTAL|TOTAL RESERVA)/i.test(text))return text;
+  }
+  return String(await page.locator('body').textContent().catch(()=>'')).replace(/\u00a0/g,' ');
+}
 async function openFinalSummary(page){
-  const already=page.getByText(/TOTAL IDA/i).first();if(await isVisible(already))return;
-  // El desglose se abre desde el precio de la reserva. Según viewport puede ser una barra fija o una píldora superior.
+  const domText=await finalSummaryDomText(page);
+  if(/TOTAL IDA/i.test(domText)&&/TOTAL VUELTA/i.test(domText)&&/(?:PRECIO TOTAL|TOTAL RESERVA)/i.test(domText)){
+    console.log('[vueling] Pantalla final alcanzada: el desglose ya está presente en el DOM aunque permanezca colapsado.');
+    return false;
+  }
+  // Fallback para variantes en las que Vueling no inserta el desglose hasta abrir «Detalles de tu reserva».
   const candidates=[
     page.locator('footer-breakdown .breakdown-header .total').first(),
-    page.locator('footer-breakdown .toggle').first(),
+    page.locator('footer-breakdown .new-toggle').first(),
+    page.locator('footer-breakdown .breakdown-header').first(),
     page.locator('sb-breakdown .breakdown-header').first(),
-    page.locator('header button').filter({hasText:/\d+[.,]\d{2}\s*€/}).last(),
-    page.getByText(/TOTAL RESERVA/i).first(),
-    page.getByText(/\d+[.,]\d{2}\s*€/).first()
+    page.getByText(/DETALLES DE TU RESERVA/i).first(),
+    page.getByText(/TOTAL RESERVA/i).first()
   ];
-  let opened=false;
-  for(const trigger of candidates){if(!(await isVisible(trigger)))continue;await trigger.click({force:true,timeout:7000}).catch(()=>{});if(await page.getByText(/TOTAL IDA/i).first().isVisible().catch(()=>false)){opened=true;break;}await pause(page,450);}
-  if(!opened)await page.getByText(/TOTAL IDA/i).first().waitFor({state:'visible',timeout:15000}).catch(()=>{});
-  if(!(await page.getByText(/TOTAL IDA/i).first().isVisible().catch(()=>false)))throw new Error('No se pudo abrir el desglose del precio final desde «Total reserva».');
-  await pause(page,500);console.log('[vueling] Desglose final abierto desde el precio de la reserva.');
+  for(const trigger of candidates){
+    if(!(await isVisible(trigger)))continue;
+    await trigger.click({force:true,timeout:7000}).catch(()=>{});await pause(page,450);
+    const text=await finalSummaryDomText(page);
+    if(/TOTAL IDA/i.test(text)&&/TOTAL VUELTA/i.test(text)&&/(?:PRECIO TOTAL|TOTAL RESERVA)/i.test(text)){console.log('[vueling] Desglose final abierto desde «Detalles de tu reserva».');return true;}
+  }
+  throw new Error('La pantalla de Pago está abierta, pero Vueling todavía no ha insertado el desglose final en el DOM.');
 }
 async function waitForSummary(page){
-  await openFinalSummary(page);const body=await page.locator('body').innerText();
+  let body=await finalSummaryDomText(page);
+  if(!(/TOTAL IDA/i.test(body)&&/TOTAL VUELTA/i.test(body)&&/(?:PRECIO TOTAL|TOTAL RESERVA)/i.test(body))){await openFinalSummary(page);body=await finalSummaryDomText(page);}
   const total=labeledMoney(body,'(?:PRECIO TOTAL|TOTAL RESERVA)')||moneyFromString((body.match(/^\s*([\d.]+,\d{2})\s*€/m)||[])[1]||'');
   const outStart=body.search(/\bIDA\b/i),retStart=body.search(/\bVUELTA\b/i);let outboundGross=labeledMoney(body,'TOTAL IDA'),returnGross=labeledMoney(body,'TOTAL VUELTA'),services=labeledMoney(body,'TOTAL SERVICIOS');
   const outText=outStart>=0&&retStart>outStart?body.slice(outStart,retStart):body;const retText=retStart>=0?body.slice(retStart):body;
@@ -878,13 +916,13 @@ async function waitForSummary(page){
   let outbound=outboundGross,returnPrice=returnGross,baggage=services||baggageLines,mode='separate-services';
   const tol=.08;
   if(!(services>0&&Math.abs(total-(outboundGross+returnGross+services))<tol)){
-    // En la vista de escritorio Vueling incluye cada maleta dentro de TOTAL IDA/TOTAL VUELTA.
+    // Algunas variantes incluyen la maleta dentro de TOTAL IDA/TOTAL VUELTA.
     if(baggageLines>0){outbound=Math.max(0,outboundGross-baggageOutbound);returnPrice=Math.max(0,returnGross-baggageReturn);baggage=baggageLines;mode='baggage-inside-leg-totals';}
   }
   const otherServices=Math.max(0,total-(outbound+returnPrice+baggage));if(otherServices>tol)baggage+=otherServices;
-  if(!(total>0&&outboundGross>0&&returnGross>0))throw new Error('El desglose final apareció pero no se pudieron leer total, ida y vuelta.');
+  if(!(total>0&&outboundGross>0&&returnGross>0))throw new Error('La pantalla final apareció pero no se pudieron leer total, ida y vuelta del DOM.');
   if(Math.abs(total-(outbound+returnPrice+baggage))>.12)throw new Error(`El desglose no cuadra: total ${moneyText(total)} frente a ida+vuelta+maleta ${moneyText(outbound+returnPrice+baggage)}.`);
-  console.log(`[vueling] Resumen final (${mode}) · ida ${moneyText(outbound)} · vuelta ${moneyText(returnPrice)} · maleta ${moneyText(baggage)} · TOTAL ${moneyText(total)}.`);
+  console.log(`[vueling] Resumen final aceptado (${mode}) · ida ${moneyText(outbound)} · vuelta ${moneyText(returnPrice)} · maleta ${moneyText(baggage)} · TOTAL ${moneyText(total)}.`);
   return {total,outbound,return:returnPrice,baggage,services:baggage,outboundGross,returnGross,baggageOutbound,baggageReturn,otherServices};
 }
 async function monitorVueling(context,page){
@@ -907,7 +945,7 @@ async function monitorVueling(context,page){
   await continueFromLuggage(page);await snapshot(page,'08-extras');
   await selectNoInsuranceAndContinue(page);await snapshot(page,'08b-pago');
   const prices=await waitForSummary(page);await snapshot(page,'09-resumen-final');
-  const summaryBody=await page.locator('body').innerText();
+  const summaryBody=await finalSummaryDomText(page);
   const outboundTimeOk=!config.outboundTime||new RegExp(String(config.outboundTime).replace(':','[:h]'),'i').test(summaryBody),returnTimeOk=!config.returnTime||new RegExp(String(config.returnTime).replace(':','[:h]'),'i').test(summaryBody);
   const routesOk=new RegExp(`\\b${String(config.origin||'').toUpperCase()}\\b[\\s\\S]*\\b${String(config.destination||'').toUpperCase()}\\b`,'i').test(summaryBody)&&new RegExp(`\\b${String(config.destination||'').toUpperCase()}\\b[\\s\\S]*\\b${String(config.origin||'').toUpperCase()}\\b`,'i').test(summaryBody);
   if(!outboundTimeOk||!returnTimeOk||!routesOk)throw new Error(`El resumen final no confirma la ruta/horarios esperados (${config.origin} ${config.outboundTime} / ${config.destination} ${config.returnTime}).`);
