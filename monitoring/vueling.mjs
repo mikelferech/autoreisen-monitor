@@ -1,4 +1,4 @@
-// MFE_VUELING_AUTOMATION_VERSION: 1.0.15
+// MFE_VUELING_AUTOMATION_VERSION: 1.0.16
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
@@ -685,7 +685,16 @@ async function dismissExtraBagUpsell(page){
   await skip.click({force:true,timeout:10000});await page.locator('.cdk-overlay-backdrop.cdk-overlay-backdrop-showing').waitFor({state:'hidden',timeout:15000}).catch(()=>{});await dialog.waitFor({state:'hidden',timeout:15000}).catch(()=>{});await pause(page,650);
   console.log('[vueling] Oferta adicional de maleta descartada.');return true;
 }
-async function extrasPageActive(page){return /\/booking\/extras/i.test(String(page.url()||''))||await page.getByText(/PREFIERO CONTINUAR SIN ASEGURAR MI VIAJE|ASEGURA TU VIAJE|SIN SEGURO|PERSONALIZA TU VUELO|SERVICIOS ADICIONALES/i).first().isVisible().catch(()=>false);}
+async function extrasPageActive(page){
+  const url=String(page.url()||'');
+  if(/\/booking\/extras/i.test(url))return true;
+  // La interfaz móvil observada en GitHub Actions no cambia siempre a /booking/extras:
+  // muestra «Personalizar» con tarjetas Asientos, Equipaje facturado, Flex Pack, Seguros, etc.
+  const body=String(await page.locator('body').textContent().catch(()=>''));
+  const personalized=/\bPersonalizar\b/i.test(body)&&/\bSeguros\b/i.test(body)&&/Equipaje facturado/i.test(body);
+  const insuranceDetail=/PREFIERO CONTINUAR SIN ASEGURAR MI VIAJE|\bSIN SEGURO\b|ASEGURA TU VIAJE/i.test(body);
+  return personalized||insuranceDetail;
+}
 async function clickCheckedBagAcceptIfPresent(page){
   // En la vista específica «Equipaje facturado» Vueling muestra primero ACEPTAR.
   // Ese botón NO lleva todavía a Extras: vuelve a «Escoge tu equipaje» mostrando «Maletas añadidas».
@@ -742,24 +751,58 @@ async function continueFromLuggage(page){
   }
   throw new Error(`Vueling no avanzó de Equipaje facturado a Extras. Estado: ACEPTAR=${accepted?'resuelto':'pendiente'}, CONTINUAR principal=${mainContinued?'pulsado':'pendiente'}.`);
 }
+async function openInsuranceOptions(page){
+  // Si ya estamos dentro del comparador de seguros, no hay nada que abrir.
+  if(await page.getByText(/PREFIERO CONTINUAR SIN ASEGURAR MI VIAJE/i).first().isVisible().catch(()=>false))return;
+  if(await page.getByText(/^SIN SEGURO$/i).first().isVisible().catch(()=>false))return;
+
+  // En GitHub Actions, tras Equipaje se abre primero «Personalizar» y hay que entrar
+  // expresamente en la tarjeta «Seguros» pulsando «Contratar».
+  let insurance=page.locator('vy-insurances-card').first();
+  if(!(await isVisible(insurance))){
+    const title=page.getByText(/^SEGUROS$/i).first();
+    if(await isVisible(title))insurance=title.locator('xpath=ancestor::vy-insurances-card[1]');
+  }
+  if(!(await isVisible(insurance)))return;
+  let open=insurance.getByText(/^CONTRATAR$/i).first();
+  if(!(await isVisible(open)))open=insurance.locator('.ssr-button').filter({hasText:/Contratar/i}).first();
+  if(!(await isVisible(open)))open=insurance;
+  await open.scrollIntoViewIfNeeded().catch(()=>{});
+  await open.click({timeout:10000}).catch(()=>open.click({force:true,timeout:5000}));
+  console.log('[vueling] Tarjeta Seguros abierta desde Personalizar.');
+  await page.getByText(/PREFIERO CONTINUAR SIN ASEGURAR MI VIAJE|^SIN SEGURO$/i).first().waitFor({state:'visible',timeout:60000});
+  await pause(page,700);await snapshot(page,'08-seguros-abiertos').catch(()=>{});
+}
 async function selectNoInsuranceAndContinue(page){
-  await page.getByText(/PREFIERO CONTINUAR SIN ASEGURAR MI VIAJE|ASEGURA TU VIAJE|SIN SEGURO|PERSONALIZA TU VUELO/i).first().waitFor({state:'visible',timeout:70000});
+  await page.getByText(/Personalizar|SEGUROS|PREFIERO CONTINUAR SIN ASEGURAR MI VIAJE|ASEGURA TU VIAJE|SIN SEGURO/i).first().waitFor({state:'visible',timeout:70000});
+  await openInsuranceOptions(page);
+
   // La interfaz móvil usa literalmente «Prefiero continuar sin asegurar mi viaje».
   let noInsurance=page.getByText(/PREFIERO CONTINUAR SIN ASEGURAR MI VIAJE/i).first();
   if(await isVisible(noInsurance)){
     const host=noInsurance.locator('xpath=ancestor::*[self::label or self::div or self::section][.//input[@type="radio" or @type="checkbox"]][1]');
     const input=host.locator('input[type="radio"],input[type="checkbox"]').first();
-    if(await isVisible(input))await input.check({force:true}).catch(()=>input.click({force:true}));else await noInsurance.click({force:true});
+    if(await input.count().catch(()=>0))await input.check({force:true}).catch(()=>noInsurance.click({force:true}));else await noInsurance.click({force:true});
   }else{
-    // Escritorio: tarjeta «SIN SEGURO».
-    noInsurance=page.getByText(/^SIN SEGURO$/i).first();await noInsurance.scrollIntoViewIfNeeded().catch(()=>{});
-    const card=noInsurance.locator('xpath=ancestor::*[self::div or self::article or self::section][1]');
-    const selected=card.getByText(/Seleccionado/i).first();
-    if(!(await isVisible(selected))){let zero=card.getByRole('button',{name:/0[,.]00\s*€/i}).first();if(!(await isVisible(zero)))zero=card.getByText(/0[,.]00\s*€/i).last();if(await isVisible(zero))await zero.click({force:true});else await card.click({force:true});}
+    // Escritorio / comparador XCover: hay una columna exacta «SIN SEGURO» y se pulsa
+    // su precio 0,00 € para escogerla. No confundimos esta opción con la tarjeta general «SEGUROS».
+    noInsurance=page.getByText(/^SIN SEGURO$/i).first();
+    await noInsurance.waitFor({state:'visible',timeout:40000});
+    await noInsurance.scrollIntoViewIfNeeded().catch(()=>{});
+    let card=noInsurance.locator('xpath=ancestor::*[self::div or self::article or self::section][.//*[contains(normalize-space(.),"0,00") or contains(normalize-space(.),"00,00")]][1]');
+    if(!(await card.count().catch(()=>0)))card=noInsurance.locator('xpath=ancestor::*[self::div or self::article or self::section][1]');
+    let zero=card.getByRole('button',{name:/0+[,.]00\s*€/i}).first();
+    if(!(await isVisible(zero)))zero=card.getByText(/0+[,.]00\s*€/i).last();
+    if(await isVisible(zero))await zero.click({force:true,timeout:8000});else await noInsurance.click({force:true,timeout:8000});
   }
-  await pause(page,700);console.log('[vueling] Seguro rechazado: continuar sin asegurar el viaje.');await snapshot(page,'08a-sin-seguro');
-  let continueButton=page.locator('footer-breakdown .cta button').filter({hasText:/CONTINUAR/i}).last();if(!(await isVisible(continueButton)))continueButton=page.getByRole('button',{name:/^CONTINUAR$/i}).last();
-  await continueButton.waitFor({state:'visible',timeout:20000});await continueButton.scrollIntoViewIfNeeded().catch(()=>{});await continueButton.click({timeout:10000}).catch(()=>continueButton.click({force:true,timeout:5000}));
+  await pause(page,800);console.log('[vueling] Seguro rechazado: continuar sin asegurar el viaje.');await snapshot(page,'08a-sin-seguro');
+
+  // Tras seleccionar «Sin seguro» el botón CONTINUAR puede estar bastante abajo en escritorio.
+  let continueButton=page.locator('footer-breakdown .cta button').filter({hasText:/^\s*CONTINUAR\s*$/i}).last();
+  if(!(await isVisible(continueButton)))continueButton=page.getByRole('button',{name:/^CONTINUAR$/i}).last();
+  if(!(await isVisible(continueButton)))continueButton=page.getByText(/^CONTINUAR$/i).last();
+  await continueButton.waitFor({state:'visible',timeout:30000});await continueButton.scrollIntoViewIfNeeded().catch(()=>{});
+  await continueButton.click({timeout:10000}).catch(()=>continueButton.click({force:true,timeout:5000}));
   await page.getByText(/ÚLTIMO PASO|ASÍ QUEDA TU VIAJE|¿CÓMO PREFIERES PAGAR\?/i).first().waitFor({state:'visible',timeout:80000});await pause(page,900);
   console.log('[vueling] Pantalla final de pago alcanzada; no se introducirá ningún medio de pago.');
 }
