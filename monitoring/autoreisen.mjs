@@ -1,4 +1,4 @@
-// MFE_AUTOREISEN_AUTOMATION_VERSION: 2.2.13
+// MFE_AUTOREISEN_AUTOMATION_VERSION: 2.2.14
 import {acceptCookies,clickFirst,daysBetween,fillFirst,isoNow,money,snapshot} from './lib.mjs';
 
 const MONTH_TOKENS={
@@ -77,9 +77,35 @@ function resultsLookValid(text,config){
   return /mostrando precios|prices for|tarifas|precios para|recogida|pick up/i.test(text)&&dateAppears(text,pick)&&dateAppears(text,drop)&&rentalDurationAppears(text,config);
 }
 async function safeText(page){return page.locator('body').innerText({timeout:12000}).catch(()=> '');}
+const AUTOREISEN_VERIFY_RE=/please wait|request is being verified|verifying|comprobando su navegador|un momento|espere mientras se verifica|verifica(?:ndo)? su solicitud/i;
+async function prepareAutoReisenContext(context){
+  await context.addInitScript(()=>{
+    try{Object.defineProperty(Navigator.prototype,'webdriver',{get:()=>false,configurable:true});}catch{}
+    try{Object.defineProperty(navigator,'webdriver',{get:()=>false,configurable:true});}catch{}
+  }).catch(()=>{});
+}
+async function waitThroughAutoReisenVerification(page,{timeoutMs=30000}={}){
+  const started=Date.now();let text='';let seen=false;
+  while(Date.now()-started<timeoutMs){
+    text=await safeText(page);
+    const title=await page.title().catch(()=> '');
+    const challenged=AUTOREISEN_VERIFY_RE.test(`${title}
+${text}`);
+    if(!challenged)return {text,challenge:false,seen};
+    seen=true;
+    await page.waitForLoadState('domcontentloaded',{timeout:3500}).catch(()=>{});
+    await page.waitForTimeout(1800);
+  }
+  text=await safeText(page);
+  return {text,challenge:AUTOREISEN_VERIFY_RE.test(`${await page.title().catch(()=> '')}
+${text}`),seen};
+}
 async function openCandidate(page,url){
-  await page.goto(url,{waitUntil:'commit',timeout:45000});await page.waitForLoadState('domcontentloaded',{timeout:18000}).catch(()=>{});await page.waitForTimeout(2200);
-  const text=await safeText(page);return {text,challenge:/please wait|request is being verified|verifying|comprobando su navegador|un momento/i.test(text)};
+  await page.goto(url,{waitUntil:'commit',timeout:45000});await page.waitForLoadState('domcontentloaded',{timeout:18000}).catch(()=>{});
+  const verified=await waitThroughAutoReisenVerification(page,{timeoutMs:30000});
+  if(verified.challenge)await snapshot(page,'autoreisen-verificacion').catch(()=>{});
+  else await page.waitForTimeout(1200);
+  return verified;
 }
 async function selectByPredicate(select,predicate){const options=await select.locator('option').evaluateAll(nodes=>nodes.map(o=>({value:o.value,text:(o.textContent||'').trim()}))).catch(()=>[]);const match=options.find(predicate);if(!match)return false;await select.selectOption(match.value);return true;}
 async function selectOffice(select,label,id=''){const wanted=normalize(label),words=wanted.split(' ').filter(x=>x.length>2),target=String(id||'').trim();if(target){const exact=await selectByPredicate(select,o=>String(o.value).trim()===target);if(exact)return true;}return selectByPredicate(select,o=>{const text=normalize(o.text);return words.length?words.every(w=>text.includes(w)):text.includes(wanted);});}
@@ -243,7 +269,7 @@ async function diagnosticSummary(page,text,parsed,config){
   const found=parsed.found.length?` Vehículos grupo ${config.group}: ${parsed.found.join(' | ')}`:'';const formState=await formStateSummary(page);return `URL final: ${page.url()}.${heading?` Página: ${heading}.`:''}${found}${formState?` Formulario: ${formState}`:''}`;
 }
 export async function scanAutoReisenFleet(browser,config){
-  const context=await browser.newContext({locale:'es-ES',timezoneId:'Atlantic/Canary',viewport:{width:1440,height:1100},userAgent:'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140 Safari/537.36'});const page=await context.newPage();
+  const context=await browser.newContext({locale:'es-ES',timezoneId:'Atlantic/Canary',viewport:{width:1440,height:1100},userAgent:'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140 Safari/537.36'});await prepareAutoReisenContext(context);const page=await context.newPage();
   try{
     // Para obtener la flota completa usamos un navegador real. AutoReisen protege el listado frente a peticiones HTTP directas,
     // pero el formulario normal del navegador sigue siendo la fuente correcta para una consulta puntual del usuario.
@@ -253,7 +279,7 @@ export async function scanAutoReisenFleet(browser,config){
     let submitted=await fillNamedLegacyForm(page,config).catch(()=>false);if(!submitted)submitted=await fillPositionalLegacyForm(page,config).catch(()=>false);if(!submitted)submitted=await fillModernForm(page,config).catch(()=>false);
     if(submitted){await page.waitForLoadState('domcontentloaded',{timeout:35000}).catch(()=>{});await page.waitForTimeout(4500);}
     let text=await safeText(page);
-    if(/please wait|request is being verified|verifying|comprobando su navegador|un momento/i.test(text))throw new Error('AutoReisen activó la verificación anti-bot durante la consulta con navegador.');
+    if(AUTOREISEN_VERIFY_RE.test(text))throw new Error('AutoReisen mantiene activa la verificación de navegador tras 30 s. Se conserva el último precio válido y se adjunta diagnóstico.');
     let parsed=parseResult(text,{...config,group:'',model:''});
     const validDates=resultsLookValid(text,config);
     if(parsed.fleet.length&&validDates){const imageUrl=await selectedVehicleImage(page,config).catch(()=>'');const fleet=enrichFleetImage(parsed.fleet,config,imageUrl);await snapshot(page,'autoreisen-flota');return {source:'AutoReisen · flota real · GitHub Actions + Playwright',checkedAt:isoNow(),availability:'Disponible',pickupOfficeId:String(config.pickupOfficeId||officeId(config.pickup)||''),dropoffOfficeId:String(config.dropoffOfficeId||officeId(config.dropoff)||''),pickupAt:config.pickupAt,dropoffAt:config.dropoffAt,imageUrl,fleet};}
@@ -261,7 +287,7 @@ export async function scanAutoReisenFleet(browser,config){
 
     // Segundo intento: URL de resultados sin fijar coche. Con Playwright puede funcionar aunque la misma URL falle desde un Worker.
     const direct=new URL(directResultUrl({...config,model:'',carId:''}));direct.searchParams.delete('coche');direct.searchParams.delete('id_coche');
-    const opened=await openCandidate(page,direct.toString()).catch(()=>({text:'',challenge:false}));if(opened.challenge)throw new Error('AutoReisen activó su verificación anti-bot.');
+    const opened=await openCandidate(page,direct.toString()).catch(()=>({text:'',challenge:false}));if(opened.challenge)throw new Error('AutoReisen mantiene activa la verificación de navegador tras 30 s. Se conserva el último precio válido y se adjunta diagnóstico.');
     text=opened.text||await safeText(page);parsed=parseResult(text,{...config,group:'',model:''});
     if(parsed.fleet.length&&resultsLookValid(text,config)){const imageUrl=await selectedVehicleImage(page,config).catch(()=>'');const fleet=enrichFleetImage(parsed.fleet,config,imageUrl);await snapshot(page,'autoreisen-flota-directa');return {source:'AutoReisen · flota real · GitHub Actions + Playwright',checkedAt:isoNow(),availability:'Disponible',pickupOfficeId:String(config.pickupOfficeId||officeId(config.pickup)||''),dropoffOfficeId:String(config.dropoffOfficeId||officeId(config.dropoff)||''),pickupAt:config.pickupAt,dropoffAt:config.dropoffAt,imageUrl,fleet};}
     const diag=await diagnosticSummary(page,text,parsed,config);throw new Error(`AutoReisen no devolvió una lista de vehículos interpretable para esta búsqueda. ${diag}`);
@@ -269,7 +295,7 @@ export async function scanAutoReisenFleet(browser,config){
 }
 
 export async function monitorAutoReisen(browser,config){
-  const context=await browser.newContext({locale:'es-ES',timezoneId:'Atlantic/Canary',viewport:{width:1440,height:1100},userAgent:'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140 Safari/537.36'});const page=await context.newPage();
+  const context=await browser.newContext({locale:'es-ES',timezoneId:'Atlantic/Canary',viewport:{width:1440,height:1100},userAgent:'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140 Safari/537.36'});await prepareAutoReisenContext(context);const page=await context.newPage();
   try{
     // Strategy 1: use AutoReisen's public results query directly. This avoids fragile visual form selectors.
     const direct=directResultUrl(config);let opened=await openCandidate(page,direct).catch(()=>({text:'',challenge:false}));if(opened.challenge)opened={text:'',challenge:true};await acceptCookies(page);let text=opened.text||await safeText(page);let parsed=parseResult(text,config);
@@ -278,7 +304,7 @@ export async function monitorAutoReisen(browser,config){
     // Strategy 2: fill the actual named legacy fields, not the first selects in the document.
     const base=resultsEntryUrl(process.env.AUTOREISEN_SEARCH_URL||config.searchUrl);await openCandidate(page,base).catch(()=>{});await acceptCookies(page);const intro=page.getByText(/^\s*Continuar\s*$/i).first();if(await intro.isVisible().catch(()=>false))await intro.click().catch(()=>{});await revealSearchForm(page);
     let submitted=await fillNamedLegacyForm(page,config).catch(()=>false);if(!submitted)submitted=await fillPositionalLegacyForm(page,config).catch(()=>false);if(!submitted)submitted=await fillModernForm(page,config).catch(()=>false);if(submitted){await page.waitForLoadState('domcontentloaded',{timeout:35000}).catch(()=>{});await page.waitForTimeout(4000);}text=await safeText(page);
-    if(/please wait|request is being verified|verifying|comprobando su navegador|un momento/i.test(text))throw new Error('AutoReisen activó la verificación anti-bot durante la consulta.');parsed=parseResult(text,config);await snapshot(page,'autoreisen-resultados');
+    if(AUTOREISEN_VERIFY_RE.test(text))throw new Error('AutoReisen mantiene activa la verificación de navegador tras 30 s. Se conserva el último precio válido y se adjunta diagnóstico.');parsed=parseResult(text,config);await snapshot(page,'autoreisen-resultados');
     if(parsed.index>=0&&parsed.total&&resultsLookValid(text,config)){const imageUrl=await selectedVehicleImage(page,config).catch(()=>''),relevant=parsed.lines.slice(parsed.index,parsed.index+16).join(' '),days=daysBetween(config.pickupAt,config.dropoffAt),fleet=enrichFleetImage(parsed.fleet,config,imageUrl);return {source:'AutoReisen · formulario identificado · GitHub Actions + Playwright',checkedAt:isoNow(),price:parsed.total,total:parsed.total,pricePerDay:parsed.total/days,availability:/no disponible|agotado|sold out|not available/i.test(relevant)?'No disponible':'Disponible',group:config.group,model:config.model,carId:String(config.carId||knownCarId(config.model)||''),pickupOfficeId:String(config.pickupOfficeId||officeId(config.pickup)||''),dropoffOfficeId:String(config.dropoffOfficeId||officeId(config.dropoff)||''),pickupAt:config.pickupAt,dropoffAt:config.dropoffAt,imageUrl,fleet};}
     const diag=await diagnosticSummary(page,text,parsed,config);
     if(parsed.index>=0&&parsed.total&&!rentalDurationAppears(text,config))throw new Error(`AutoReisen devolvió un precio para una duración distinta. MFE Viajes espera ${expectedRentalDays(config)} días (${dateParts(config.pickupAt).hour}:${dateParts(config.pickupAt).minute} → ${dateParts(config.dropoffAt).hour}:${dateParts(config.dropoffAt).minute}). ${diag}`);
@@ -287,4 +313,4 @@ export async function monitorAutoReisen(browser,config){
   }finally{await context.close();}
 }
 
-export const __autoreisenTest={resultsEntryUrl,directResultUrl,officeId,knownCarId,targetIndex,extractTotal,normalize,modelTokens,groupVehicleLines,resultsLookValid,dateParts,expectedRentalDays,rentalDurationAppears,fleetFromLines,sameVehicle,enrichFleetImage};
+export const __autoreisenTest={resultsEntryUrl,directResultUrl,officeId,knownCarId,targetIndex,extractTotal,normalize,modelTokens,groupVehicleLines,resultsLookValid,dateParts,expectedRentalDays,rentalDurationAppears,fleetFromLines,sameVehicle,enrichFleetImage,AUTOREISEN_VERIFY_RE};
