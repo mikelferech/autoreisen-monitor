@@ -4,6 +4,15 @@ import {daysBetween,isoNow,moneyText,postResult,readLatest,sendTelegram} from '.
 import {monitorAutoReisen,scanAutoReisenFleet} from './autoreisen.mjs';
 
 const document=JSON.parse(await fs.readFile(new URL('./config.json',import.meta.url),'utf8'));
+
+async function launchAutoReisenBrowser(){
+  const base={headless:true,args:['--disable-blink-features=AutomationControlled']};
+  try{return await chromium.launch({...base,channel:'chrome'});}catch(error){
+    console.warn('[autoreisen] Chrome estable no disponible; se usa Chromium de Playwright.',error?.message||error);
+    return chromium.launch(base);
+  }
+}
+
 const defaults={enabled:true,telegramEnabled:true,telegramNotifyEveryCheck:true,telegramNotifyPriceDrop:true,telegramNotifyBelowReserved:true,telegramNotifyAvailability:true,telegramNotifyError:true,telegramNotifyRecovery:true,telegramMinDropAmount:0,telegramMinDropPercent:0};
 let config={...defaults,...(document.autoreisen||{})};
 const force=/^(1|true|yes)$/i.test(String(process.env.MFE_FORCE_RUN||''));
@@ -23,7 +32,7 @@ if(telegramTest){
   process.exit(0);
 }
 if(fleetOnly){
-  const browser=await chromium.launch({headless:true});
+  const browser=await launchAutoReisenBrowser();
   try{
     const result=await scanAutoReisenFleet(browser,config);
     await postResult('autoreisen',{...result,ok:true,status:'ok',scanMode:'fleet',requestId,checkedAt:result.checkedAt||isoNow()});
@@ -41,7 +50,7 @@ if(!config.enabled){console.log('Monitor AutoReisen desactivado desde MFE Viajes
 if(!force)console.log('Comprobación automática diaria de las 07:30 (Europe/Madrid).');
 const previous=await readLatest();
 
-const browser=await chromium.launch({headless:true});
+const browser=await launchAutoReisenBrowser();
 try{
   const result=await monitorAutoReisen(browser,config);
   const notices=[];const current=Number(result.total||result.price)||0;const prior=Number(previous.result?.total||previous.result?.price)||0;const reserved=Number(config.reservedPrice)||0;
