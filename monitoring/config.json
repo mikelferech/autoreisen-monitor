@@ -36,7 +36,7 @@
     "telegramMinDropPercent": 0,
     "telegramNotifyEveryCheck": true,
     "scheduleMode": "daily",
-    "scheduleTime": "07:30",
+    "scheduleTime": "06:30",
     "scheduleTimeZone": "Europe/Madrid",
     "pickupOfficeId": "18",
     "dropoffOfficeId": "18",
