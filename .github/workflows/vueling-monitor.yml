@@ -2,7 +2,7 @@ name: Vueling · MFE Viajes
 
 on:
   schedule:
-    - cron: '30 6 * * *'
+    - cron: '40 6 * * *'
       timezone: "Europe/Madrid"
   workflow_dispatch:
     inputs:
