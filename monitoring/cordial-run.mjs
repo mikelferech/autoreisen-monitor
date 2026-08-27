@@ -4,7 +4,7 @@ import {isoNow,postResult} from './lib.mjs';
 import {monitorCordial} from './cordial.mjs';
 
 const document=JSON.parse(await fs.readFile(new URL('./config.json',import.meta.url),'utf8'));
-const config={enabled:true,scheduleTime:'08:00',scheduleTimeZone:'Europe/Madrid',...(document.cordial||{})};
+const config={enabled:true,scheduleTime:'06:30',scheduleTimeZone:'Europe/Madrid',...(document.cordial||{})};
 if(config.enabled===false){console.log('Monitor Cordial desactivado desde MFE Viajes.');process.exit(0);}
 
 async function launchInstalledChrome(){
