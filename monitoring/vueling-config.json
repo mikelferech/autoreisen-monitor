@@ -36,7 +36,7 @@
     "telegramEnabled": false,
     "telegramNotifyEveryCheck": false,
     "telegramNotifyPriceDrop": false,
-    "scheduleTime": "09:00",
+    "scheduleTime": "06:30",
     "scheduleTimeZone": "Europe/Madrid",
     "title": "Vueling · precio final",
     "color": "#fff000",
