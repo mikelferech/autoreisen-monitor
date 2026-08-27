@@ -55,7 +55,7 @@
     "searchUrl": "https://www.becordial.com/gran-canaria-sur/cordial-santa-agueda/",
     "enabled": true,
     "scheduleMode": "daily",
-    "scheduleTime": "06:30",
+    "scheduleTime": "06:35",
     "scheduleTimeZone": "Europe/Madrid",
     "title": "Cordial Santa Águeda",
     "color": "#35a5d6",
