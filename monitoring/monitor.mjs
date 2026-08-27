@@ -47,7 +47,7 @@ if(fleetOnly){
 }
 if(!config.enabled){console.log('Monitor AutoReisen desactivado desde MFE Viajes.');process.exit(0);}
 
-if(!force)console.log('Comprobación automática diaria de las 07:30 (Europe/Madrid).');
+if(!force)console.log('Comprobación automática diaria de las 06:30 (Europe/Madrid).');
 const previous=await readLatest();
 
 const browser=await launchAutoReisenBrowser();
