@@ -2,8 +2,8 @@ name: AutoReisen · MFE Viajes
 
 on:
   schedule:
-    # Una sola ejecución diaria a las 07:30 de Madrid. GitHub gestiona automáticamente CET/CEST.
-    - cron: '30 7 * * *'
+    # Una sola ejecución diaria a las 06:30 de Madrid. GitHub gestiona automáticamente CET/CEST.
+    - cron: '30 6 * * *'
       timezone: "Europe/Madrid"
   workflow_dispatch:
     inputs:
