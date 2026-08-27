@@ -13,7 +13,7 @@ const defaults={
   contactFirstName:'Fjie',contactLastName:'Kfkfr',email:'jdje@g.com',country:'España',phonePrefix:'+34',phone:'654654654',
   passenger1FirstName:'Fjie',passenger1LastName:'Kfkfr',passenger2FirstName:'Prueba',passenger2LastName:'Mfe',
   marketingConsent:false,telegramEnabled:true,telegramNotifyEveryCheck:true,telegramNotifyPriceDrop:true,
-  reservedPrice:0,scheduleTime:'09:00',scheduleTimeZone:'Europe/Madrid'
+  reservedPrice:0,scheduleTime:'06:30',scheduleTimeZone:'Europe/Madrid'
 };
 const saved=JSON.parse(await fs.readFile(CONFIG_FILE,'utf8'));
 const config={...defaults,...(saved.vueling||saved||{})};
