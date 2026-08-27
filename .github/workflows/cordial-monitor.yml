@@ -2,7 +2,7 @@ name: Cordial · MFE Viajes
 
 on:
   schedule:
-    - cron: '30 6 * * *'
+    - cron: '35 6 * * *'
       timezone: "Europe/Madrid"
   workflow_dispatch:
 
