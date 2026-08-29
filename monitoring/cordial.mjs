@@ -1,45 +1,80 @@
-// MFE_CORDIAL_AUTOMATION_VERSION: 2.2.08
+// MFE_CORDIAL_AUTOMATION_VERSION: 2.2.09
 import {isoNow,snapshot,acceptCookies} from './lib.mjs';
 
 const normalize=value=>String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/\s+/g,' ').trim();
 const visible=loc=>loc.isVisible().catch(()=>false);
 async function acceptCordialCookies(page){
-  // BeCordial carga su gestor de cookies dentro de un iframe (/cookies/manager).
-  // El helper genérico solo ve botones del documento principal; si no cerramos
-  // este iframe, la capa .cookiepanel-container-wrap bloquea el autocomplete,
-  // el botón Buscar y cualquier selección real del hotel.
+  // BeCordial abre su gestor de cookies dentro de un iframe (/cookies/manager)
+  // y lo cubre con Magnific Popup. En agosto de 2026 el iframe empezó a tardar
+  // más en estar interactivo en GitHub Actions: el overlay podía estar visible
+  // aunque todavía no hubiera ningún botón detectable. Intentamos primero el
+  // consentimiento normal y, si el panel sigue bloqueando, cerramos únicamente
+  // la capa visual conservando las cookies necesarias del sitio.
   await acceptCookies(page).catch(()=>{});
-  const frameLocator=page.frameLocator('#cookie_panel_iframe, iframe[src*="/cookies/manager"]').first();
-  const framePresent=await page.locator('#cookie_panel_iframe, iframe[src*="/cookies/manager"]').count().catch(()=>0);
-  let clicked=false;
+  const overlay='.cookiepanel-container-wrap,.popup-cookiepanel-wrapper,.mfp-wrap.cookiepanel-container-wrap,.mfp-bg';
+  const iframe='#cookie_panel_iframe, iframe[src*="/cookies/manager"]';
+  const framePresent=await page.locator(iframe).count().catch(()=>0);
+  let clicked=false,forcedClose=false;
+
   if(framePresent){
-    for(const label of [/^aceptar$/i,/aceptar todas/i,/accept all/i,/^accept$/i,/consentir/i]){
-      const btn=frameLocator.getByRole('button',{name:label}).first();
-      if(await btn.isVisible().catch(()=>false)){
-        clicked=await btn.click({timeout:5000}).then(()=>true).catch(()=>false);
+    const frameLocator=page.frameLocator(iframe).first();
+    // Esperamos explícitamente a que el iframe haya pintado su contenido.
+    await frameLocator.locator('body').waitFor({state:'attached',timeout:8000}).catch(()=>{});
+    await page.waitForTimeout(350);
+    const labels=[/^aceptar$/i,/aceptar todas/i,/aceptar todo/i,/accept all/i,/^accept$/i,/allow all/i,/consentir/i];
+    for(const label of labels){
+      const candidates=[
+        frameLocator.getByRole('button',{name:label}).first(),
+        frameLocator.getByText(label,{exact:true}).first(),
+        frameLocator.locator('button,input[type="button"],input[type="submit"],a').filter({hasText:label}).first()
+      ];
+      for(const btn of candidates){
+        if(!await btn.isVisible().catch(()=>false))continue;
+        clicked=await btn.click({timeout:5000,force:true}).then(()=>true).catch(()=>false);
         if(clicked)break;
       }
-    }
-    // Respaldo por texto para el caso de que el iframe no exponga role=button.
-    if(!clicked){
-      for(const label of [/^aceptar$/i,/aceptar todas/i]){
-        const btn=frameLocator.getByText(label,{exact:true}).first();
-        if(await btn.isVisible().catch(()=>false)){
-          clicked=await btn.click({timeout:5000}).then(()=>true).catch(()=>false);
-          if(clicked)break;
-        }
-      }
+      if(clicked)break;
     }
   }
+
   if(clicked){
-    await page.waitForTimeout(450);
+    await page.waitForTimeout(500);
     await page.locator('.cookiepanel-container-wrap,.popup-cookiepanel-wrapper').first()
       .waitFor({state:'hidden',timeout:5000}).catch(()=>{});
   }
-  const overlayVisible=await page.locator('.cookiepanel-container-wrap,.popup-cookiepanel-wrapper').first()
+
+  let overlayVisible=await page.locator('.cookiepanel-container-wrap,.popup-cookiepanel-wrapper').first()
     .isVisible().catch(()=>false);
-  if(framePresent||overlayVisible){
-    console.log(`[cordial] Cookies: iframe=${framePresent?'sí':'no'} · acción=${clicked?'aceptar':'no detectada'} · overlay=${overlayVisible?'visible':'cerrado'}.`);
+
+  // Respaldo robusto: la captura diagnóstica del 29/08/2026 mostró el iframe
+  // presente pero sin botón accionable. El propio sitio expone RolCookies y
+  // Magnific Popup; intentamos cerrar mediante sus APIs y, como último recurso,
+  // retiramos solo la capa bloqueante del DOM. Esto no altera el formulario ni
+  // inyecta datos: únicamente permite interactuar con la página ya cargada.
+  if(overlayVisible){
+    forcedClose=await page.evaluate(()=>{
+      let changed=false;
+      try{
+        const manager=window.RolCookies?.Manager;
+        if(manager&&typeof manager.save==='function'){manager.save();changed=true;}
+      }catch{}
+      try{
+        const jq=window.jQuery||window.$;
+        if(jq?.magnificPopup&&typeof jq.magnificPopup.close==='function'){jq.magnificPopup.close();changed=true;}
+      }catch{}
+      for(const el of document.querySelectorAll('.cookiepanel-container-wrap,.popup-cookiepanel-wrapper,.mfp-wrap.cookiepanel-container-wrap,.mfp-bg')){
+        try{el.remove();changed=true;}catch{}
+      }
+      try{document.documentElement.style.overflow='';document.body.style.overflow='';document.body.style.paddingRight='';}catch{}
+      return changed;
+    }).catch(()=>false);
+    await page.waitForTimeout(300);
+    overlayVisible=await page.locator('.cookiepanel-container-wrap,.popup-cookiepanel-wrapper').first()
+      .isVisible().catch(()=>false);
+  }
+
+  if(framePresent||overlayVisible||clicked||forcedClose){
+    console.log(`[cordial] Cookies: iframe=${framePresent?'sí':'no'} · acción=${clicked?'aceptar':forcedClose?'cierre de respaldo':'no detectada'} · overlay=${overlayVisible?'visible':'cerrado'}.`);
   }else{
     console.log('[cordial] Cookies: sin panel bloqueante.');
   }
