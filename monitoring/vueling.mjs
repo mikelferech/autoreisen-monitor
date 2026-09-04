@@ -1,4 +1,4 @@
-// MFE_VUELING_AUTOMATION_VERSION: 1.0.18
+// MFE_VUELING_AUTOMATION_VERSION: 1.0.19
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
@@ -69,6 +69,18 @@ function workerCredentials(){const url=String(process.env.MFE_VUELING_WORKER_URL
 async function workerRequest(payload,{authenticated=false,allowError=false}={}){const {url,secret}=workerCredentials();const headers={'Content-Type':'application/json'};if(authenticated)headers.Authorization=`Bearer ${secret}`;const response=await fetch(url,{method:'POST',headers,body:JSON.stringify(payload)});let data=null;try{data=await response.json();}catch{}if(!response.ok&&!allowError)throw new Error(`Worker ${response.status}: ${data?.error||'respuesta no válida'}`);return {response,data};}
 async function postResult(result){const {response,data}=await workerRequest({action:'monitor-write',type:'vueling',result},{authenticated:true,allowError:true});if(!response.ok)throw new Error(data?.error||`Worker HTTP ${response.status}`);return data;}
 async function readLatest(){const {response,data}=await workerRequest({action:'vueling'},{allowError:true});return response.ok?data?.result||null:null;}
+function madridDate(value=new Date()){
+  const stamp=value instanceof Date?value:new Date(value);
+  if(Number.isNaN(stamp.getTime()))return '';
+  const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Madrid',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(stamp);
+  const get=type=>parts.find(x=>x.type===type)?.value||'';
+  return `${get('year')}-${get('month')}-${get('day')}`;
+}
+function successfulResultToday(result){
+  if(!result||result.ok===false||String(result.status||'').toLowerCase()==='error')return false;
+  const checkedAt=result.checkedAt||result.receivedAt||result.updatedAt||'';
+  return Boolean(checkedAt)&&madridDate(checkedAt)===madridDate();
+}
 async function sendTelegram(text){const token=String(process.env.TELEGRAM_BOT_TOKEN||'').trim(),chatId=String(process.env.TELEGRAM_CHAT_ID||'').trim();if(!token||!chatId)throw new Error('Faltan TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID.');const response=await fetch(`https://api.telegram.org/bot${encodeURIComponent(token)}/sendMessage`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chat_id:chatId,text:String(text),disable_web_page_preview:true})});let data=null;try{data=await response.json();}catch{}if(!response.ok||data?.ok===false)throw new Error(data?.description||`Telegram HTTP ${response.status}`);}
 function buildVuelingDeeplink(c=config){const url=new URL('https://m.vueling.com/SB');url.searchParams.set('o',String(c.origin||'BIO').toUpperCase());url.searchParams.set('d',String(c.destination||'LPA').toUpperCase());url.searchParams.set('dd',c.departureDate);url.searchParams.set('rd',c.returnDate);url.searchParams.set('dt','0');url.searchParams.set('adt',String(Math.max(1,Number(c.adults)||1)));url.searchParams.set('chd',String(Math.max(0,Number(c.children)||0)));url.searchParams.set('inf',String(Math.max(0,Number(c.infants)||0)));url.searchParams.set('c','es-ES');url.searchParams.set('cur','EUR');if(c.outboundFlight)url.searchParams.set('ofn',String(c.outboundFlight).toUpperCase());if(c.returnFlight)url.searchParams.set('rfn',String(c.returnFlight).toUpperCase());return url.toString();}
 async function acceptCookies(page){
@@ -557,27 +569,66 @@ async function selectUnderseatInJourney(page,journey,label='trayecto'){
   await row.waitFor({state:'attached',timeout:12000});
   if(!(await clickUnderseatRow(row,label)))throw new Error(`No se pudo seleccionar la pieza bajo el asiento para ${label}.`);
 }
-async function selectUnderseatForPassengerCard(page,card,passengerLabel){
-  const header=card.locator('mat-expansion-panel-header').first();
-  if(await isVisible(header)){
-    const expanded=await header.getAttribute('aria-expanded').catch(()=>null);
-    if(expanded==='false'){
-      await header.click({force:true}).catch(async()=>card.locator('.gcbg-pax-header').first().click({force:true}).catch(()=>{}));
-      await pause(page,500);
-    }
-  }
+async function passengerUnderseatStatus(card){
+  const headerText=await card.locator('.gcbg-pax-header').innerText().catch(()=>'');
   const journeys=card.locator('.gcbg-pax-content__journey');
   const count=await journeys.count().catch(()=>0);
-  if(count<2)throw new Error(`No aparecen ida y vuelta de equipaje de mano para ${passengerLabel}.`);
+  let selected=0;
   for(let i=0;i<count;i++){
     const journey=journeys.nth(i);
-    if(!(await isVisible(journey)))continue;
-    const route=(await journey.locator('.gcbg-pax-content__journey-label').first().textContent().catch(()=>'' )).trim()||`trayecto ${i+1}`;
-    await selectUnderseatInJourney(page,journey,`${passengerLabel} · ${route}`);
+    const title=journey.locator('.gcbg-option-title').filter({hasText:/^\s*1\s+pieza\s+de\s+equipaje\s+de\s+mano\s*$/i}).first();
+    if(!(await title.count().catch(()=>0)))continue;
+    const row=title.locator('xpath=ancestor::div[contains(@class,"gcbg-option-row")][1]');
+    if(await underseatRowSelected(row))selected++;
   }
-  const headerText=await card.locator('.gcbg-pax-header').innerText().catch(()=>'');
-  if(/2 piezas de equipaje/i.test(headerText))throw new Error(`${passengerLabel}: Vueling ha dejado seleccionada la opción de 2 piezas en equipaje de mano.`);
-  if(/Sin seleccionar/i.test(headerText))throw new Error(`${passengerLabel}: queda algún trayecto de equipaje de mano sin seleccionar.`);
+  const pending=/Sin seleccionar|Selección pendiente/i.test(headerText);
+  const wrong=/2 piezas de equipaje/i.test(headerText);
+  return {ok:count>=2&&selected>=2&&!pending&&!wrong,count,selected,pending,wrong,headerText};
+}
+async function selectUnderseatForPassengerCard(page,cardIndex,passengerLabel){
+  let lastStatus=null,lastError=null;
+  for(let attempt=1;attempt<=3;attempt++){
+    const card=page.locator('vy-gcbg-pax-card').nth(cardIndex);
+    try{
+      await card.waitFor({state:'attached',timeout:12000});
+      const header=card.locator('mat-expansion-panel-header').first();
+      if(await isVisible(header)){
+        const expanded=await header.getAttribute('aria-expanded').catch(()=>null);
+        if(expanded==='false'){
+          await header.click({force:true}).catch(async()=>card.locator('.gcbg-pax-header').first().click({force:true}).catch(()=>{}));
+          await pause(page,650);
+        }
+      }
+      const journeys=card.locator('.gcbg-pax-content__journey');
+      const count=await journeys.count().catch(()=>0);
+      if(count<2)throw new Error(`No aparecen ida y vuelta de equipaje de mano para ${passengerLabel}.`);
+      for(let i=0;i<count;i++){
+        const journey=journeys.nth(i);
+        if(!(await isVisible(journey)))continue;
+        const route=(await journey.locator('.gcbg-pax-content__journey-label').first().textContent().catch(()=>'' )).trim()||`trayecto ${i+1}`;
+        await selectUnderseatInJourney(page,journey,`${passengerLabel} · ${route}`);
+        await pause(page,300);
+      }
+      await pause(page,750);
+      lastStatus=await passengerUnderseatStatus(card);
+      if(lastStatus.ok){
+        console.log(`[vueling] ${passengerLabel}: equipaje de mano confirmado en ida y vuelta (intento ${attempt}).`);
+        return true;
+      }
+      lastError=new Error(`${passengerLabel}: selección incompleta tras intento ${attempt} (${lastStatus.selected}/${lastStatus.count}; ${lastStatus.headerText.replace(/\s+/g,' ').trim()||'sin resumen'}).`);
+    }catch(error){lastError=error;}
+    console.warn(`[vueling] ${passengerLabel}: reintentando equipaje de mano (${attempt}/3). ${lastError?.message||''}`);
+    await snapshot(page,`07a-equipaje-mano-${cardIndex+1}-reintento-${attempt}`).catch(()=>{});
+    const freshCard=page.locator('vy-gcbg-pax-card').nth(cardIndex);
+    const header=freshCard.locator('mat-expansion-panel-header').first();
+    if(await isVisible(header)){
+      const expanded=await header.getAttribute('aria-expanded').catch(()=>null);
+      if(expanded==='true'){await header.click({force:true}).catch(()=>{});await pause(page,300);}
+      await header.click({force:true}).catch(()=>{});await pause(page,550);
+    }else{await pause(page,650);}
+  }
+  const detail=lastStatus?` Estado final: ${lastStatus.selected}/${lastStatus.count} trayectos correctos; ${lastStatus.headerText.replace(/\s+/g,' ').trim()}.`:'';
+  throw new Error(`${passengerLabel}: Vueling no conservó la selección «1 pieza bajo el asiento» después de 3 intentos.${detail} ${lastError?.message||''}`.trim());
 }
 async function selectUnderseatOption(page){
   if(!config.underseatBag)return;
@@ -604,7 +655,7 @@ async function selectUnderseatOption(page){
     for(let i=0;i<adults;i++){
       const card=cards.nth(i);
       const name=(await card.locator('.gcbg-pax-header__name').first().textContent().catch(()=>'' )).trim()||`Pasajero ${i+1}`;
-      await selectUnderseatForPassengerCard(page,card,name);
+      await selectUnderseatForPassengerCard(page,i,name);
     }
   }else{
     // Fallback para una variante sin tarjetas por pasajero: selecciona la opción exacta
@@ -956,6 +1007,10 @@ async function monitorVueling(context,page){
 if(telegramTest){await sendTelegram(`🧪 MFE Viajes · Vueling Telegram OK\n${new Date().toLocaleString('es-ES',{timeZone:'Europe/Madrid'})}`);process.exit(0);}
 if(!config.enabled&&!force){console.log('Monitor Vueling desactivado.');process.exit(0);}
 const previous=await readLatest().catch(()=>null);
+if(!force&&!dryRun&&successfulResultToday(previous)){
+  console.log(`[vueling] OMITIDO: ya existe una comprobación correcta de hoy (${previous.checkedAt||previous.receivedAt||'sin hora'}). El cron tardío no repetirá la consulta.`);
+  process.exit(0);
+}
 let browser;
 try{browser=await chromium.launch({headless:true,channel:'chrome'});}catch{browser=await chromium.launch({headless:true});}
 const context=await browser.newContext({locale:'es-ES',viewport:{width:430,height:932},isMobile:true,hasTouch:true,userAgent:'Mozilla/5.0 (Linux; Android 16; MFE Viajes Monitor) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136 Mobile Safari/537.36'});
