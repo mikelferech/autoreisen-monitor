@@ -1,11 +1,19 @@
 import fs from 'node:fs/promises';
 import {chromium} from 'playwright';
-import {isoNow,postResult} from './lib.mjs';
+import {isoNow,postResult,readTrackerLatest,successfulResultToday} from './lib.mjs';
 import {monitorCordial} from './cordial.mjs';
 
 const document=JSON.parse(await fs.readFile(new URL('./config.json',import.meta.url),'utf8'));
 const config={enabled:true,scheduleTime:'06:35',scheduleTimeZone:'Europe/Madrid',...(document.cordial||{})};
+const force=/^(1|true|yes)$/i.test(String(process.env.MFE_FORCE_RUN||''));
 if(config.enabled===false){console.log('Monitor Cordial desactivado desde MFE Viajes.');process.exit(0);}
+if(!force){
+  const previous=await readTrackerLatest('cordial');
+  if(successfulResultToday(previous.result)){
+    console.log(`[cordial] OMITIDO: ya existe una comprobación correcta de hoy (${previous.result.checkedAt||previous.result.receivedAt||'sin hora'}). El cron tardío no repetirá la consulta.`);
+    process.exit(0);
+  }
+}
 
 async function launchInstalledChrome(){
   const attempts=[];
