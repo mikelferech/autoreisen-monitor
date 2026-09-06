@@ -61,5 +61,32 @@
     "color": "#35a5d6",
     "gradient1": "#113b58",
     "gradient2": "#166b91"
+  },
+  "flightops": {
+    "enabled": true,
+    "flights": [
+      {
+        "id": "flight-out",
+        "number": "VY3272",
+        "date": "2026-09-14",
+        "departure": "2026-09-14T06:50",
+        "arrival": "2026-09-14T09:05",
+        "origin": "BIO",
+        "destination": "LPA",
+        "from": "Bilbao (BIO)",
+        "to": "Gran Canaria (LPA)"
+      },
+      {
+        "id": "flight-back",
+        "number": "VY3271",
+        "date": "2026-09-21",
+        "departure": "2026-09-21T16:40",
+        "arrival": "2026-09-21T20:45",
+        "origin": "LPA",
+        "destination": "BIO",
+        "from": "Gran Canaria (LPA)",
+        "to": "Bilbao (BIO)"
+      }
+    ]
   }
 }
