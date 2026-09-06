@@ -1,0 +1,60 @@
+name: Estado vuelos · MFE Viajes
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Forzar consulta ahora'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flightops-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    defaults:
+      run:
+        working-directory: monitoring
+    env:
+      MFE_WORKER_URL: ${{ secrets.MFE_WORKER_URL }}
+      MFE_MONITOR_SECRET: ${{ secrets.MFE_MONITOR_SECRET }}
+      MFE_FORCE_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.force || false }}
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: monitoring/package-lock.json
+      - name: Instalar dependencias Node
+        run: npm ci
+      - name: Comprobar Chrome preinstalado
+        shell: bash
+        run: |
+          set -e
+          if command -v google-chrome >/dev/null 2>&1; then google-chrome --version
+          elif command -v google-chrome-stable >/dev/null 2>&1; then google-chrome-stable --version
+          elif command -v chromium >/dev/null 2>&1; then chromium --version
+          elif command -v chromium-browser >/dev/null 2>&1; then chromium-browser --version
+          else echo "::error::El runner no tiene Chrome/Chromium preinstalado."; exit 1; fi
+      - name: Consultar Aena y Vueling
+        run: node flightops-run.mjs
+      - name: Guardar diagnóstico si falla
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flightops-diagnostico
+          path: monitoring/artifacts/
+          if-no-files-found: ignore
+          retention-days: 7
