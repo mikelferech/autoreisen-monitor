@@ -5,6 +5,12 @@ on:
     - cron: '35 6 * * *'
       timezone: "Europe/Madrid"
   workflow_dispatch:
+    inputs:
+      force:
+        description: 'Forzar comprobación aunque ya exista una correcta hoy'
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: read
@@ -23,6 +29,7 @@ jobs:
     env:
       MFE_WORKER_URL: ${{ secrets.MFE_WORKER_URL }}
       MFE_MONITOR_SECRET: ${{ secrets.MFE_MONITOR_SECRET }}
+      MFE_FORCE_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.force || false }}
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
     steps:
       - uses: actions/checkout@v4
