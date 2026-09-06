@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import {chromium} from 'playwright';
-import {daysBetween,isoNow,moneyText,postResult,readLatest,sendTelegram} from './lib.mjs';
+import {daysBetween,isoNow,moneyText,postResult,readLatest,sendTelegram,successfulResultToday} from './lib.mjs';
 import {monitorAutoReisen,scanAutoReisenFleet} from './autoreisen.mjs';
 
 const document=JSON.parse(await fs.readFile(new URL('./config.json',import.meta.url),'utf8'));
@@ -49,6 +49,10 @@ if(!config.enabled){console.log('Monitor AutoReisen desactivado desde MFE Viajes
 
 if(!force)console.log('Comprobación automática diaria de las 06:30 (Europe/Madrid).');
 const previous=await readLatest();
+if(!force&&successfulResultToday(previous.result)){
+  console.log(`[autoreisen] OMITIDO: ya existe una comprobación correcta de hoy (${previous.result.checkedAt||previous.result.receivedAt||'sin hora'}). El cron tardío no repetirá la consulta.`);
+  process.exit(0);
+}
 
 const browser=await launchAutoReisenBrowser();
 try{
