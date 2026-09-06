@@ -34,10 +34,24 @@ export async function workerRequest(payload,{authenticated=false,allowError=fals
   if(!response.ok&&!allowError)throw new Error(`Worker ${response.status}: ${data?.error||'respuesta no válida'}`);
   return {response,data};
 }
-export async function readLatest(){
-  const {response,data}=await workerRequest({action:'autoreisen'},{allowError:true});
+export async function readTrackerLatest(type='autoreisen'){
+  const action=String(type||'autoreisen').trim().toLowerCase();
+  const {response,data}=await workerRequest({action},{allowError:true});
   if(response.ok&&data?.result)return {result:data.result,lastError:data.lastError||null};
   return {result:null,lastError:data?.lastError||null};
+}
+export async function readLatest(){return readTrackerLatest('autoreisen');}
+export function dateInTimeZone(value=new Date(),timeZone='Europe/Madrid'){
+  const stamp=value instanceof Date?value:new Date(value);
+  if(Number.isNaN(stamp.getTime()))return '';
+  const parts=new Intl.DateTimeFormat('en-CA',{timeZone,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(stamp);
+  const get=type=>parts.find(x=>x.type===type)?.value||'';
+  return `${get('year')}-${get('month')}-${get('day')}`;
+}
+export function successfulResultToday(result,{timeZone='Europe/Madrid',now=new Date()}={}){
+  if(!result||result.ok===false||String(result.status||'').toLowerCase()==='error')return false;
+  const checkedAt=result.checkedAt||result.receivedAt||result.updatedAt||'';
+  return Boolean(checkedAt)&&dateInTimeZone(checkedAt,timeZone)===dateInTimeZone(now,timeZone);
 }
 export async function postResult(type,result){
   const {response,data}=await workerRequest({action:'monitor-write',type,result},{authenticated:true,allowError:true});
