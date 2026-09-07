@@ -1,4 +1,4 @@
-// MFE_FLIGHTOPS_AUTOMATION_VERSION: 1.0.0
+// MFE_FLIGHTOPS_AUTOMATION_VERSION: 1.0.1
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -55,7 +55,12 @@ function timeAfterLabel(text,patterns){
 }
 function compactCode(value,max=18){
   const v=clean(value).replace(/^(?:Nº|NUMERO|NÚMERO)\s*/i,'');
-  if(!v||v==='--')return '';
+  if(!v||v==='--'||v==='-')return '';
+  const n=normalize(v);
+  // Evita arrastrar la siguiente etiqueta cuando el valor real todavía es "--".
+  // Ej.: Terminal -- / Puerta -- nunca puede convertirse en "Terminal: Puerta --".
+  if(/^(TERMINAL|PUERTA|GATE|FACTURACION|CHECK.?IN|EMBARQUE|BOARDING|CINTA|BAGGAGE|ESTADO|STATUS|SALIDA|LLEGADA|INICIO|CIERRE)\b/.test(n))return '';
+  if(/\b(?:DEL?|DE LA|ESTADO DEL VUELO|INFORMACION|AYUDA)\b/.test(n)&&v.length>8)return '';
   return v.length<=max?v:v.slice(0,max);
 }
 function statusFromText(text=''){
@@ -68,8 +73,56 @@ function statusFromText(text=''){
   ];
   return known.find(([needle])=>n.includes(needle))?.[1]||'';
 }
+function monthTokens(month){
+  const es=['ENE','FEB','MAR','ABR','MAY','JUN','JUL','AGO','SEP','OCT','NOV','DIC'];
+  const en=['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+  const idx=Math.max(0,Math.min(11,Number(month)-1));return [es[idx],en[idx]];
+}
+function flightDateSignals(text,flight={}){
+  const date=localDate(flight.date||flight.departure);if(!/^\d{4}-\d{2}-\d{2}$/.test(date))return [];
+  const [y,m,d]=date.split('-'),shortY=y.slice(-2),day=String(Number(d));
+  return [date,`${d}/${m}/${y}`,`${d}-${m}-${y}`,`${d}/${m}/${shortY}`,`${day}/${Number(m)}/${y}`,...monthTokens(m).flatMap(mon=>[`${day} ${mon}`,`${d} ${mon}`,`${day} DE ${mon}`])].map(normalize);
+}
+function placeSignals(value=''){
+  const n=normalize(value),code=airportCode(value),words=n.replace(/\([^)]*\)/g,' ').split(/[^A-Z0-9]+/).filter(w=>w.length>=4&&!['AEROPUERTO','AIRPORT','GRAN'].includes(w));
+  return [...new Set([code,...words].filter(Boolean))];
+}
+function identityEvidence(text='',flight={}){
+  const n=normalize(text),number=normalize(flight.number||'');
+  const numberMatch=Boolean(number&&n.includes(number));
+  const dateMatch=flightDateSignals(text,flight).some(token=>token&&n.includes(token));
+  const originSignals=placeSignals(flight.origin||flight.from),destinationSignals=placeSignals(flight.destination||flight.to);
+  const originMatch=originSignals.some(token=>token&&n.includes(token));
+  const destinationMatch=destinationSignals.some(token=>token&&n.includes(token));
+  const depTime=localTime(flight.departure),timeMatch=Boolean(depTime&&n.includes(normalize(depTime)));
+  const routePair=originMatch&&destinationMatch;
+  const strong=numberMatch&&(dateMatch||routePair||(timeMatch&&(originMatch||destinationMatch)));
+  const score=(numberMatch?3:0)+(dateMatch?2:0)+(originMatch?1:0)+(destinationMatch?1:0)+(timeMatch?1:0);
+  return {numberMatch,dateMatch,originMatch,destinationMatch,timeMatch,routePair,strong,score};
+}
+function nearestFlightSegment(text='',flight={},radius=850){
+  const raw=String(text||''),number=normalize(flight.number||'');if(!number)return {segment:'',evidence:identityEvidence('',flight)};
+  const n=normalize(raw);let from=0,best=null;
+  while(true){const index=n.indexOf(number,from);if(index<0)break;const segment=raw.slice(Math.max(0,index-radius),Math.min(raw.length,index+number.length+radius)),evidence=identityEvidence(segment,flight);if(!best||evidence.score>best.evidence.score)best={segment,evidence};from=index+number.length;}
+  return best||{segment:'',evidence:identityEvidence('',flight)};
+}
+function verifiedStatus(segment='',flight={},evidence=identityEvidence(segment,flight)){
+  if(!evidence.strong)return {status:'',verified:false};
+  const status=statusFromText(segment);if(!status)return {status:'',verified:false};
+  // Una cancelación es un dato crítico: además del nº de vuelo exigimos fecha y
+  // otra señal operativa (ruta o hora) en el mismo bloque cercano. Así palabras
+  // genéricas de ayuda/FAQ nunca pueden cancelar un vuelo en la app.
+  if(status==='Cancelado'){
+    const strictCancel=evidence.numberMatch&&evidence.dateMatch&&(evidence.routePair||evidence.timeMatch||(evidence.originMatch&&evidence.destinationMatch));
+    return {status:strictCancel?status:'',verified:strictCancel};
+  }
+  return {status,verified:true};
+}
 function parseOperationalText(text='',flight={},kind='generic'){
-  const seg=segmentAround(text,flight.number||'',2200);
+  const nearby=nearestFlightSegment(text,flight,850),seg=nearby.segment,evidence=nearby.evidence;
+  if(!evidence.strong){
+    return {found:Boolean(evidence.numberMatch),identityVerified:false,identityScore:evidence.score,status:'',statusVerified:false,terminal:'',gate:'',checkInCounters:'',baggageBelt:'',boardingStart:'',boardingClose:'',scheduledDeparture:localTime(flight.departure),scheduledArrival:localTime(flight.arrival),kind,rawSegment:seg.slice(0,5000)};
+  }
   const terminal=compactCode(valueAfterLabel(seg,[/^terminal\b/i,/\bterminal\b/i],{maxAhead:3}),12);
   const gate=compactCode(valueAfterLabel(seg,[/^puerta(?:\s+de\s+embarque)?\b/i,/^gate\b/i,/\bpuerta\b/i],{maxAhead:3}),12);
   const counters=compactCode(valueAfterLabel(seg,[/^mostradores?(?:\s+de\s+facturaci[oó]n)?\b/i,/^facturaci[oó]n\b/i,/^check[- ]?in(?:\s+counters?)?\b/i],{maxAhead:4}),22);
@@ -78,7 +131,8 @@ function parseOperationalText(text='',flight={},kind='generic'){
   const boardingClose=timeAfterLabel(seg,[/^cierre\b/i,/^embarque\s+cierre\b/i,/^boarding\s+closes?\b/i,/^boarding\s+close\b/i]);
   const scheduledDeparture=timeAfterLabel(seg,[/^salida\b/i,/^hora\s+salida\b/i,/^departure\b/i])||localTime(flight.departure);
   const scheduledArrival=timeAfterLabel(seg,[/^llegada\b/i,/^hora\s+llegada\b/i,/^arrival\b/i])||localTime(flight.arrival);
-  return {found:normalize(seg).includes(normalize(flight.number||'')),status:statusFromText(seg),terminal,gate,checkInCounters:counters,baggageBelt:belt,boardingStart,boardingClose,scheduledDeparture,scheduledArrival,kind,rawSegment:seg.slice(0,5000)};
+  const verified=verifiedStatus(seg,flight,evidence);
+  return {found:true,identityVerified:true,identityScore:evidence.score,status:verified.status,statusVerified:verified.verified,terminal,gate,checkInCounters:counters,baggageBelt:belt,boardingStart,boardingClose,scheduledDeparture,scheduledArrival,kind,rawSegment:seg.slice(0,5000)};
 }
 async function tryFill(locator,value){
   if(!value)return false;
@@ -155,24 +209,32 @@ function choose(primary,secondary,key){return clean(primary?.[key])||clean(secon
 function sameValue(a,b){return Boolean(clean(a)&&clean(b)&&normalize(a)===normalize(b));}
 function mergeFlight(flight,aenaDeparture,aenaArrival,vueling){
   const dep=aenaDeparture||{},arr=aenaArrival||{},v=vueling||{};
-  const status=choose(dep,v,'status')||choose(arr,v,'status');
-  const terminal=choose(dep,v,'terminal');
-  const gate=choose(dep,v,'gate');
-  const checkInCounters=choose(dep,v,'checkInCounters');
-  const baggageBelt=choose(arr,v,'baggageBelt');
-  const boardingStart=choose(v,dep,'boardingStart');
-  const boardingClose=choose(v,dep,'boardingClose');
-  const scheduledDeparture=choose(v,dep,'scheduledDeparture')||localTime(flight.departure);
-  const scheduledArrival=choose(v,arr,'scheduledArrival')||localTime(flight.arrival);
-  const sources=[dep,arr,v].filter(x=>x?.ok).map(x=>({name:x.source,mode:x.mode,found:Boolean(x.found),url:x.url,error:x.error||''}));
+  const verifiedSources=[dep,arr,v].filter(x=>x?.ok&&x?.identityVerified===true);
+  const statusCandidates=verifiedSources.filter(x=>x.statusVerified===true&&clean(x.status));
+  const cancelCandidates=statusCandidates.filter(x=>normalize(x.status)==='CANCELADO');
+  // Cancelado solo se acepta si una fuente tiene evidencia estricta del vuelo;
+  // para el resto de estados basta con una fuente verificada. Si dos fuentes
+  // coinciden, se registra además en confirmations.
+  const status=cancelCandidates[0]?.status||statusCandidates[0]?.status||'';
+  const pickVerified=(primary,secondary,key)=>clean(primary?.identityVerified===true?primary?.[key]:'')||clean(secondary?.identityVerified===true?secondary?.[key]:'')||'';
+  const terminal=pickVerified(dep,v,'terminal');
+  const gate=pickVerified(dep,v,'gate');
+  const checkInCounters=pickVerified(dep,v,'checkInCounters');
+  const baggageBelt=pickVerified(arr,v,'baggageBelt');
+  const boardingStart=pickVerified(v,dep,'boardingStart');
+  const boardingClose=pickVerified(v,dep,'boardingClose');
+  const scheduledDeparture=pickVerified(v,dep,'scheduledDeparture')||localTime(flight.departure);
+  const scheduledArrival=pickVerified(v,arr,'scheduledArrival')||localTime(flight.arrival);
+  const sources=[dep,arr,v].filter(x=>x?.ok).map(x=>({name:x.source,mode:x.mode,found:Boolean(x.found),identityVerified:x.identityVerified===true,statusVerified:x.statusVerified===true,identityScore:Number(x.identityScore)||0,url:x.url,error:x.error||''}));
   const confirmations=[];
-  if(sameValue(dep.gate,v.gate))confirmations.push('gate');
-  if(sameValue(dep.terminal,v.terminal))confirmations.push('terminal');
-  if(sameValue(dep.status,v.status))confirmations.push('status');
+  if(dep.identityVerified===true&&v.identityVerified===true&&sameValue(dep.gate,v.gate))confirmations.push('gate');
+  if(dep.identityVerified===true&&v.identityVerified===true&&sameValue(dep.terminal,v.terminal))confirmations.push('terminal');
+  if(dep.statusVerified===true&&v.statusVerified===true&&sameValue(dep.status,v.status))confirmations.push('status');
+  const identityVerified=verifiedSources.length>0,statusVerified=Boolean(status&&statusCandidates.length);
   return {
     id:String(flight.id||flight.number||''),number:String(flight.number||''),date:localDate(flight.date||flight.departure),origin:airportCode(flight.origin||flight.from),destination:airportCode(flight.destination||flight.to),
-    departure:flight.departure||'',arrival:flight.arrival||'',status,terminal,gate,checkInCounters,baggageBelt,boardingStart,boardingClose,scheduledDeparture,scheduledArrival,
-    confirmations,sources,hasOperationalData:Boolean(status||terminal||gate||checkInCounters||baggageBelt||boardingStart||boardingClose)
+    departure:flight.departure||'',arrival:flight.arrival||'',status,statusVerified,identityVerified,terminal,gate,checkInCounters,baggageBelt,boardingStart,boardingClose,scheduledDeparture,scheduledArrival,
+    confirmations,sources,hasOperationalData:Boolean(identityVerified&&(status||terminal||gate||checkInCounters||baggageBelt||boardingStart||boardingClose))
   };
 }
 export async function monitorFlightOps(browser,config={}){
@@ -186,4 +248,4 @@ export async function monitorFlightOps(browser,config={}){
   return {ok:true,status:'ok',checkedAt:new Date().toISOString(),source:'Aena + Vueling · GitHub Actions + Playwright',flights:results};
 }
 
-export const __flightOpsTest={parseOperationalText,statusFromText,valueAfterLabel,mergeFlight,airportCode};
+export const __flightOpsTest={parseOperationalText,statusFromText,valueAfterLabel,mergeFlight,airportCode,identityEvidence,nearestFlightSegment,verifiedStatus};
