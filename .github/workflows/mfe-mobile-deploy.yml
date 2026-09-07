@@ -1,0 +1,128 @@
+name: Actualizar MFE Viajes · móvil
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mfe-viajes-mobile-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      RELEASE_ZIP: mobile-release/MFE_Viajes_RELEASE.zip
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Preparar Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Comprobar ZIP recibido desde MFE Viajes
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -f "$RELEASE_ZIP" ]]; then
+            echo "::error::No existe $RELEASE_ZIP. Sube primero el ZIP desde Configuración → Servicios e integraciones → Actualización desde Android."
+            exit 1
+          fi
+          echo "ZIP localizado: $(du -h "$RELEASE_ZIP" | cut -f1)"
+
+      - name: Extraer versión
+        shell: bash
+        run: |
+          set -euo pipefail
+          RELEASE_DIR="$RUNNER_TEMP/mfe-release"
+          rm -rf "$RELEASE_DIR"
+          mkdir -p "$RELEASE_DIR"
+          unzip -q "$RELEASE_ZIP" -d "$RELEASE_DIR"
+          test -f "$RELEASE_DIR/firebase.json"
+          test -f "$RELEASE_DIR/public/index.html"
+          echo "RELEASE_DIR=$RELEASE_DIR" >> "$GITHUB_ENV"
+
+      - name: Validar MFE Viajes antes de publicar
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RELEASE_DIR"
+          node scripts/validate-release.mjs
+
+      - name: Detectar si hay Workers modificados
+        id: workers
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f "$RELEASE_DIR/ACTUALIZAR_WORKERS.bat" ]]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "La release incluye cambios de Workers."
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "La release no requiere actualizar Workers."
+          fi
+
+      - name: Comprobar secretos Cloudflare
+        if: steps.workers.outputs.changed == 'true'
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          [[ -n "$CLOUDFLARE_API_TOKEN" ]] || { echo "::error::Falta el secret CLOUDFLARE_API_TOKEN."; exit 1; }
+          [[ -n "$CLOUDFLARE_ACCOUNT_ID" ]] || { echo "::error::Falta el secret CLOUDFLARE_ACCOUNT_ID."; exit 1; }
+
+      - name: Actualizar Workers modificados
+        if: steps.workers.outputs.changed == 'true'
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          cd "$RELEASE_DIR"
+          node scripts/update-workers-ci.mjs
+
+      - name: Comprobar credencial Firebase
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_MFE_VIAJES || secrets.FIREBASE_SERVICE_ACCOUNT_PRESUPUESTO_HOGAR_9DEAD }}
+        run: |
+          set -euo pipefail
+          [[ -n "$FIREBASE_SERVICE_ACCOUNT_JSON" ]] || { echo "::error::Falta el secret FIREBASE_SERVICE_ACCOUNT_MFE_VIAJES (o el secret Firebase ya existente del proyecto)."; exit 1; }
+
+      - name: Autenticar Google / Firebase
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_MFE_VIAJES || secrets.FIREBASE_SERVICE_ACCOUNT_PRESUPUESTO_HOGAR_9DEAD }}
+
+      - name: Publicar Firebase Hosting
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RELEASE_DIR"
+          npx --yes firebase-tools@latest deploy --only hosting:viajes --project presupuesto-hogar-9dead --non-interactive
+
+      - name: Resumen
+        if: success()
+        shell: bash
+        run: |
+          VERSION=$(grep -oE 'MFE Viajes · v[0-9]+\.[0-9]+\.[0-9]+' "$RELEASE_DIR/public/index.html" | head -1 || true)
+          {
+            echo "## ✅ MFE Viajes actualizada"
+            echo
+            echo "${VERSION:-Versión publicada correctamente.}"
+            echo
+            if [[ "${{ steps.workers.outputs.changed }}" == "true" ]]; then
+              echo "- Cloudflare Workers: actualizados y verificados"
+            else
+              echo "- Cloudflare Workers: sin cambios"
+            fi
+            echo "- Firebase Hosting: publicado"
+          } >> "$GITHUB_STEP_SUMMARY"
