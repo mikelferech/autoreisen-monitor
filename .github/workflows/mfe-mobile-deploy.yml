@@ -1,7 +1,13 @@
 name: Actualizar MFE Viajes · móvil
+run-name: "MFE móvil · ${{ inputs.request_id }}"
 
 on:
   workflow_dispatch:
+    inputs:
+      request_id:
+        description: "Identificador interno de MFE Viajes"
+        required: false
+        type: string
 
 permissions:
   contents: read
