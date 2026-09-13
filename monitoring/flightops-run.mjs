@@ -1,5 +1,4 @@
 import fs from 'node:fs/promises';
-import {chromium} from 'playwright';
 import {workerRequest} from './lib.mjs';
 import {monitorFlightOps} from './flightops.mjs';
 
@@ -29,21 +28,14 @@ function shouldRun(previous){
 const previous=await readPrevious().catch(()=>null);
 if(!shouldRun(previous)){console.log('[flightops] OMITIDO: todavía no toca una nueva consulta operativa.');process.exit(0);}
 
-async function launchBrowser(){
-  const candidates=[process.env.CHROME_BIN,'/usr/bin/google-chrome','/usr/bin/google-chrome-stable','/usr/bin/chromium','/usr/bin/chromium-browser'].filter(Boolean);
-  try{return await chromium.launch({channel:'chrome',headless:true});}catch{}
-  for(const executablePath of candidates){try{await fs.access(executablePath);return await chromium.launch({executablePath,headless:true});}catch{}}
-  return chromium.launch({headless:true});
-}
-const browser=await launchBrowser();
 try{
-  const result=await monitorFlightOps(browser,config);
+  const result=await monitorFlightOps(null,config);
   const {response,data}=await workerRequest({action:'flightops-write',result},{authenticated:true,allowError:true});
   if(!response.ok)throw new Error(`Worker ${response.status}: ${data?.error||'no se pudo guardar flightops'}`);
   console.log('[flightops] OK',JSON.stringify(result,null,2));
 }catch(error){
-  const result={ok:false,status:'error',error:error?.message||String(error),checkedAt:new Date().toISOString(),source:'Aena + Vueling · GitHub Actions + Playwright'};
+  const result={ok:false,status:'error',error:error?.message||String(error),checkedAt:new Date().toISOString(),source:'Aena API pública · GitHub Actions'};
   console.error('[flightops] ERROR',error);
   await workerRequest({action:'flightops-write',result},{authenticated:true,allowError:true}).catch(()=>{});
   process.exitCode=1;
-}finally{await browser.close();}
+}
