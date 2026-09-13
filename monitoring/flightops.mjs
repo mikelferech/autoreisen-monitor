@@ -1,10 +1,11 @@
-// MFE_FLIGHTOPS_AUTOMATION_VERSION: 1.0.1
+// MFE_FLIGHTOPS_AUTOMATION_VERSION: 1.0.2
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
 const ARTIFACTS=path.resolve('artifacts');
 const VUELING_STATUS_URL='https://www.vueling.com/es/servicios-vueling/informacion-de-vuelos/estado-de-vuelos';
 const AENA_INFO_URL='https://www.aena.es/es/infovuelos.html';
+const AENA_WEBSITE_API='https://www.aena.es/sites/Satellite';
 
 const clean=v=>String(v??'').replace(/\u00a0/g,' ').replace(/[ \t]+/g,' ').trim();
 const upper=v=>clean(v).toUpperCase();
@@ -134,6 +135,62 @@ function parseOperationalText(text='',flight={},kind='generic'){
   const verified=verifiedStatus(seg,flight,evidence);
   return {found:true,identityVerified:true,identityScore:evidence.score,status:verified.status,statusVerified:verified.verified,terminal,gate,checkInCounters:counters,baggageBelt:belt,boardingStart,boardingClose,scheduledDeparture,scheduledArrival,kind,rawSegment:seg.slice(0,5000)};
 }
+
+const AENA_STATUS_LABELS={SCH:'Programado',INI:'Programado',HOR:'En hora',RET:'Retrasado',EMB:'Embarcando',ULL:'Última llamada',NPT:'Cambio de puerta',CER:'Puerta cerrada',FLY:'Despegado',FNL:'En aproximación',LND:'Aterrizado',ATE:'Aterrizado',OPE:'Equipaje en cinta',OPF:'Equipaje en cinta',IBK:'Equipaje en cinta',BOR:'Finalizado',CAN:'Cancelado',DES:'Desviado'};
+function aenaStatusLabel(code=''){return AENA_STATUS_LABELS[upper(code)]||clean(code);}
+function digitsOnly(v=''){return String(v||'').replace(/\D+/g,'');}
+function dateEsFromIso(v=''){const m=String(v||'').match(/^(\d{4})-(\d{2})-(\d{2})/);return m?`${m[3]}/${m[2]}/${m[1]}`:'';}
+function scalarText(v){return ['string','number'].includes(typeof v)?clean(v):'';}
+function deepValueByKey(obj,patterns,depth=0){
+  if(!obj||typeof obj!=='object'||depth>3)return '';
+  for(const [key,value] of Object.entries(obj)){
+    const nk=normalize(key);
+    if(patterns.some(p=>p.test(nk))){const s=scalarText(value);if(s)return s;}
+  }
+  for(const value of Object.values(obj)){const found=deepValueByKey(value,patterns,depth+1);if(found)return found;}
+  return '';
+}
+function rangeValue(first,last){const a=clean(first),b=clean(last);if(a&&b&&a!==b)return `${a}-${b}`;return a||b||'';}
+function aenaRowFlightNumber(r={}){return `${clean(r.iataCompania)||clean(r.compania)||''}${clean(r.numVuelo)||''}`.replace(/\s+/g,'');}
+function aenaRowDate(r={}){return clean(r.fecha)||clean(r.fechaVuelo)||'';}
+function aenaRowScheduled(r={}){return clean(r.horaProgramada)||clean(r.horaProg)||clean(r.horaPrevista)||'';}
+function aenaRowOtherAirport(r={}){return upper(r.iataOtro||r.aeropuertoIataOtro||r.iataDestino||r.iataOrigen||'');}
+function scoreAenaRow(r={},flight={},mode='departure'){
+  const targetDigits=digitsOnly(flight.number),rowDigits=digitsOnly(aenaRowFlightNumber(r));
+  if(!targetDigits||targetDigits!==rowDigits)return -1;
+  let score=10;
+  const expectedDate=dateEsFromIso(localDate(flight.date||flight.departure));
+  const rowDate=aenaRowDate(r);if(expectedDate&&rowDate&&normalize(expectedDate)===normalize(rowDate))score+=6;
+  const expectedOther=airportCode(mode==='departure'?(flight.destination||flight.to):(flight.origin||flight.from));
+  const rowOther=aenaRowOtherAirport(r);if(expectedOther&&rowOther===expectedOther)score+=4;
+  const expectedTime=localTime(mode==='departure'?flight.departure:flight.arrival),rowTime=aenaRowScheduled(r);if(expectedTime&&rowTime&&rowTime.startsWith(expectedTime))score+=3;
+  const rowCode=normalize(aenaRowFlightNumber(r)),targetCode=normalize(flight.number||'');if(rowCode===targetCode)score+=2;
+  return score;
+}
+function parseAenaWebsiteRow(r={},flight={},mode='departure'){
+  const firstCounter=deepValueByKey(r,[/MOSTRADOR.*(?:PRIM|INI)/,/FACTUR.*(?:PRIM|INI)/,/CHECK.*(?:FIRST|START)/]);
+  const lastCounter=deepValueByKey(r,[/MOSTRADOR.*(?:ULT|FIN)/,/FACTUR.*(?:ULT|FIN)/,/CHECK.*(?:LAST|END)/]);
+  const counters=rangeValue(firstCounter,lastCounter)||deepValueByKey(r,[/MOSTRADOR/,/FACTURACION/,/CHECKINCOUNTER/,/CHECKIN/]);
+  const boardingStart=deepValueByKey(r,[/HORA.*EMBAR/,/EMBAR.*HORA/,/BOARDING.*(?:START|TIME)/]);
+  const boardingClose=deepValueByKey(r,[/CIERRE.*EMBAR/,/EMBAR.*CIERRE/,/BOARDING.*CLOSE/]);
+  const status=aenaStatusLabel(r.estado||r.estadoVuelo||'');
+  return {found:true,identityVerified:true,identityScore:99,status,statusVerified:Boolean(status),terminal:compactCode(r.terminal||r.terminalPrimera||'',12),gate:compactCode(r.puertaPrimera||r.puerta||'',12),checkInCounters:compactCode(counters,22),baggageBelt:compactCode(r.cintaPrimera||r.cinta||'',14),boardingStart:String(boardingStart||'').match(/\b([0-2]?\d:[0-5]\d)\b/)?.[1]||'',boardingClose:String(boardingClose||'').match(/\b([0-2]?\d:[0-5]\d)\b/)?.[1]||'',scheduledDeparture:mode==='departure'?(aenaRowScheduled(r)||localTime(flight.departure)):localTime(flight.departure),scheduledArrival:mode==='arrival'?(aenaRowScheduled(r)||localTime(flight.arrival)):localTime(flight.arrival),kind:`aena-api-${mode}`,rawSegment:JSON.stringify(r).slice(0,5000)};
+}
+async function queryAenaWebsiteApi(flight,mode='departure'){
+  const origin=airportCode(flight.origin||flight.from),destination=airportCode(flight.destination||flight.to),airport=mode==='departure'?origin:destination;
+  if(!airport)return {ok:false,source:'Aena',mode,error:'Código de aeropuerto no disponible'};
+  const flightType=mode==='departure'?'S':'L';
+  const url=`${AENA_WEBSITE_API}?pagename=AENA_ConsultarVuelos&airport=${encodeURIComponent(airport)}&flightType=${flightType}&dosDias=si`;
+  try{
+    const response=await fetch(url,{headers:{Accept:'application/json,text/plain,*/*','User-Agent':'Mozilla/5.0 MFE-Viajes/GC26'},signal:AbortSignal.timeout(18000)});
+    if(!response.ok)throw new Error(`HTTP ${response.status}`);
+    const rows=await response.json();if(!Array.isArray(rows))throw new Error('Respuesta JSON inesperada');
+    const ranked=rows.map(r=>({r,score:scoreAenaRow(r,flight,mode)})).filter(x=>x.score>=10).sort((a,b)=>b.score-a.score);
+    if(!ranked.length)return {ok:true,source:'Aena',mode,url,found:false,identityVerified:false,identityScore:0,status:'',statusVerified:false,terminal:'',gate:'',checkInCounters:'',baggageBelt:'',boardingStart:'',boardingClose:'',scheduledDeparture:localTime(flight.departure),scheduledArrival:localTime(flight.arrival),kind:`aena-api-${mode}`};
+    return {ok:true,source:'Aena',mode,url,...parseAenaWebsiteRow(ranked[0].r,flight,mode),apiScore:ranked[0].score};
+  }catch(error){return {ok:false,source:'Aena',mode,url,error:`API pública Aena: ${error?.message||String(error)}`};}
+}
+
 async function tryFill(locator,value){
   if(!value)return false;
   if(await locator.count().catch(()=>0)<1)return false;
@@ -177,9 +234,11 @@ async function openPage(browser,url,name){
   catch(error){await context.close();throw error;}
 }
 async function queryAena(browser,flight,mode='departure'){
+  const api=await queryAenaWebsiteApi(flight,mode);
+  if(api?.ok&&api?.identityVerified===true)return api;
   const origin=airportCode(flight.origin||flight.from),destination=airportCode(flight.destination||flight.to);
   const airport=mode==='departure'?origin:destination;
-  if(!airport)return {ok:false,source:'Aena',mode,error:'Código de aeropuerto no disponible'};
+  if(!airport)return api?.ok?api:{ok:false,source:'Aena',mode,error:'Código de aeropuerto no disponible'};
   const param=mode==='departure'?'origin':'destination';
   const url=`${AENA_INFO_URL}?Buscar=Buscar&accion=Inicio&${param}=${encodeURIComponent(airport)}`;
   let opened;
@@ -190,8 +249,9 @@ async function queryAena(browser,flight,mode='departure'){
     const parsed=parseOperationalText(text,flight,`aena-${mode}`);
     await snapshot(page,`flightops-aena-${mode}-${flightDigits(flight.number)}`);
     await context.close();
-    return {ok:true,source:'Aena',mode,url,...parsed};
-  }catch(error){await opened?.context?.close().catch(()=>{});return {ok:false,source:'Aena',mode,url,error:error?.message||String(error)};}
+    if(parsed.identityVerified===true)return {ok:true,source:'Aena',mode,url,...parsed};
+    return api?.ok?api:{ok:true,source:'Aena',mode,url,...parsed,error:api?.error||''};
+  }catch(error){await opened?.context?.close().catch(()=>{});return api?.ok?api:{ok:false,source:'Aena',mode,url,error:[api?.error,error?.message||String(error)].filter(Boolean).join(' · ')};}
 }
 async function queryVueling(browser,flight){
   let opened;
@@ -248,4 +308,4 @@ export async function monitorFlightOps(browser,config={}){
   return {ok:true,status:'ok',checkedAt:new Date().toISOString(),source:'Aena + Vueling · GitHub Actions + Playwright',flights:results};
 }
 
-export const __flightOpsTest={parseOperationalText,statusFromText,valueAfterLabel,mergeFlight,airportCode,identityEvidence,nearestFlightSegment,verifiedStatus};
+export const __flightOpsTest={parseOperationalText,statusFromText,valueAfterLabel,mergeFlight,airportCode,identityEvidence,nearestFlightSegment,verifiedStatus,parseAenaWebsiteRow,scoreAenaRow,aenaStatusLabel};
