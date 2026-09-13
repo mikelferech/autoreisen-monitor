@@ -1,4 +1,4 @@
-// MFE_FLIGHTOPS_AUTOMATION_VERSION: 1.0.2
+// MFE_FLIGHTOPS_AUTOMATION_VERSION: 1.0.3
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -290,11 +290,16 @@ function mergeFlight(flight,aenaDeparture,aenaArrival,vueling){
   if(dep.identityVerified===true&&v.identityVerified===true&&sameValue(dep.gate,v.gate))confirmations.push('gate');
   if(dep.identityVerified===true&&v.identityVerified===true&&sameValue(dep.terminal,v.terminal))confirmations.push('terminal');
   if(dep.statusVerified===true&&v.statusVerified===true&&sameValue(dep.status,v.status))confirmations.push('status');
-  const identityVerified=verifiedSources.length>0,statusVerified=Boolean(status&&statusCandidates.length);
+  const hints=flight?.operationalHints||{};
+  const liveIdentity=verifiedSources.length>0;
+  const hinted=Boolean(hints.terminal||hints.gate||hints.checkInCounters||hints.baggageBelt||hints.boardingStart||hints.boardingClose);
+  const finalTerminal=terminal||clean(hints.terminal),finalGate=gate||clean(hints.gate),finalCounters=checkInCounters||clean(hints.checkInCounters),finalBelt=baggageBelt||clean(hints.baggageBelt),finalBoarding=boardingStart||clean(hints.boardingStart),finalBoardingClose=boardingClose||clean(hints.boardingClose);
+  const identityVerified=liveIdentity||hinted,statusVerified=Boolean(status&&statusCandidates.length);
+  if(hinted)sources.push({name:hints.source||'Aena app · última info confirmada',mode:'snapshot',found:true,identityVerified:true,statusVerified:false,identityScore:100,url:'',error:''});
   return {
     id:String(flight.id||flight.number||''),number:String(flight.number||''),date:localDate(flight.date||flight.departure),origin:airportCode(flight.origin||flight.from),destination:airportCode(flight.destination||flight.to),
-    departure:flight.departure||'',arrival:flight.arrival||'',status,statusVerified,identityVerified,terminal,gate,checkInCounters,baggageBelt,boardingStart,boardingClose,scheduledDeparture,scheduledArrival,
-    confirmations,sources,hasOperationalData:Boolean(identityVerified&&(status||terminal||gate||checkInCounters||baggageBelt||boardingStart||boardingClose))
+    departure:flight.departure||'',arrival:flight.arrival||'',status,statusVerified,identityVerified,terminal:finalTerminal,gate:finalGate,checkInCounters:finalCounters,baggageBelt:finalBelt,boardingStart:finalBoarding,boardingClose:finalBoardingClose,scheduledDeparture,scheduledArrival,
+    confirmations,sources,hasOperationalData:Boolean(identityVerified&&(status||finalTerminal||finalGate||finalCounters||finalBelt||finalBoarding||finalBoardingClose))
   };
 }
 export async function monitorFlightOps(browser,config={}){
@@ -302,10 +307,12 @@ export async function monitorFlightOps(browser,config={}){
   if(!flights.length)throw new Error('No hay vuelos configurados para seguimiento operativo.');
   const results=[];
   for(const flight of flights){
-    const [dep,arr,vueling]=await Promise.all([queryAena(browser,flight,'departure'),queryAena(browser,flight,'arrival'),queryVueling(browser,flight)]);
-    results.push(mergeFlight(flight,dep,arr,vueling));
+    // API pública de Aena primero y sin navegador. Evita los bloqueos de 5-7 minutos
+    // que provocaba Playwright justo cuando más interesa (horas previas al vuelo).
+    const [dep,arr]=await Promise.all([queryAenaWebsiteApi(flight,'departure'),queryAenaWebsiteApi(flight,'arrival')]);
+    results.push(mergeFlight(flight,dep,arr,{ok:false,source:'Vueling',mode:'omitido',error:'Consulta web omitida: Aena API prioritaria'}));
   }
-  return {ok:true,status:'ok',checkedAt:new Date().toISOString(),source:'Aena + Vueling · GitHub Actions + Playwright',flights:results};
+  return {ok:true,status:'ok',checkedAt:new Date().toISOString(),source:'Aena API pública · GitHub Actions',flights:results};
 }
 
 export const __flightOpsTest={parseOperationalText,statusFromText,valueAfterLabel,mergeFlight,airportCode,identityEvidence,nearestFlightSegment,verifiedStatus,parseAenaWebsiteRow,scoreAenaRow,aenaStatusLabel};
