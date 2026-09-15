@@ -26,7 +26,7 @@
     "model": "Seat Arona o similar",
     "reservedPrice": 114.19,
     "intervalHours": 24,
-    "telegramEnabled": true,
+    "telegramEnabled": false,
     "telegramNotifyPriceDrop": true,
     "telegramNotifyBelowReserved": true,
     "telegramNotifyAvailability": true,
