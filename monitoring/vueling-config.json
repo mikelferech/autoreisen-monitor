@@ -1,6 +1,6 @@
 {
   "vueling": {
-    "enabled": true,
+    "enabled": false,
     "origin": "BIO",
     "destination": "LPA",
     "departureDate": "2026-09-14",
@@ -38,7 +38,7 @@
     "telegramNotifyPriceDrop": false,
     "scheduleTime": "06:40",
     "scheduleTimeZone": "Europe/Madrid",
-    "title": "Vueling · precio final",
+    "title": "Vueling",
     "color": "#fff000",
     "gradient1": "#c0b302",
     "gradient2": "#fff000"
