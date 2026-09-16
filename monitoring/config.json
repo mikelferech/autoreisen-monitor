@@ -53,7 +53,7 @@
     "targetBoard": "SOLO ALOJAMIENTO",
     "reservedPrice": 1094.4,
     "searchUrl": "https://www.becordial.com/gran-canaria-sur/cordial-santa-agueda/",
-    "enabled": true,
+    "enabled": false,
     "scheduleMode": "daily",
     "scheduleTime": "06:35",
     "scheduleTimeZone": "Europe/Madrid",
