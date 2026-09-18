@@ -1,4 +1,4 @@
-// MFE_POOLS_AUTOMATION_VERSION: 1.0.0
+// MFE_POOLS_AUTOMATION_VERSION: 1.0.4
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
@@ -8,7 +8,7 @@ const SOURCE_URL='https://cordial.galileus.es/gweb/siloe/diario/?token=NUEraFBKc
 const ARTIFACTS=path.resolve('artifacts/pools');
 const clean=v=>String(v??'').replace(/\u00a0/g,' ').replace(/\s+/g,' ').trim();
 const norm=v=>clean(v).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
-const metricPattern=/(temperatura|temperature|temp\.?\b|ph\b|cloro|chlorine|bromo|bromine|turbidez|turbidity|conductividad|conductivity|alcalinidad|alkalinity|redox|orp|salinidad|salinity)/i;
+const metricPattern=/(temperatura|temperature|temp\.?\b|ph\b|cloro|chlorine|bromo|bromine|turbidez|turbidity|recirculaci[oó]n|recirculation|conductividad|conductivity|alcalinidad|alkalinity|redox|orp|salinidad|salinity)/i;
 const measurementPattern=/(last measurement|ultima medici[oó]n|última medición|1st measurement|2nd measurement|1ª medici[oó]n|2ª medici[oó]n|primera medici[oó]n|segunda medici[oó]n)/i;
 const placeholderPattern=/^(select|selecciona|seleccionar|choose|--+|piscina|pool)$/i;
 
@@ -34,6 +34,34 @@ function temperatureFromMetrics(metrics=[]){
     if(Number.isFinite(n)&&n>-5&&n<60)return n;
   }
   return null;
+}
+function metricNumber(value=''){
+  const hit=String(value??'').replace(',','.').match(/-?\d+(?:\.\d+)?/);
+  return hit?Number(hit[0]):NaN;
+}
+function repairRecirculationMeasurements(measurements=[]){
+  const cloned=(measurements||[]).map(m=>({...m,metrics:(m.metrics||[]).map(metric=>({...metric}))}));
+  const latest=cloned.find(m=>/ultima|última|last/i.test(clean(m.measurement)))||cloned[0]||null;
+  const latestTurbidity=(latest?.metrics||[]).find(metric=>/turbidez|turbidity/i.test(clean(metric.label)));
+  const latestTurbidityValue=metricNumber(latestTurbidity?.value);
+  for(const measurement of cloned){
+    if(/ultima|última|last/i.test(clean(measurement.measurement)))continue;
+    const metrics=measurement.metrics||[];
+    if(metrics.some(metric=>/recirculaci[oó]n|recirculation/i.test(clean(metric.label))))continue;
+    // Galileus/SILOE ordena visualmente el índice de recirculación junto a la
+    // primera medición. En la vista móvil el DOM puede dejar el valor (p.ej. 4)
+    // bajo la etiqueta anterior "Turbidez (UNF)". Lo reparamos solo cuando el
+    // bloque no contiene otros parámetros, el valor es una hora entera plausible
+    // y la última turbidez real es un valor bajo/decimal.
+    if(metrics.length!==1)continue;
+    const metric=metrics[0];
+    if(!/turbidez|turbidity/i.test(clean(metric.label)))continue;
+    const value=metricNumber(metric.value);
+    if(!Number.isFinite(value)||!Number.isInteger(value)||value<1||value>24)continue;
+    if(!Number.isFinite(latestTurbidityValue)||latestTurbidityValue>=1)continue;
+    metric.label='Índice de recirculación (h)';
+  }
+  return cloned;
 }
 function makeMeasurementsFromMatrix(rows=[]){
   const cleanRows=rows.map(r=>r.map(clean).filter((v,i,a)=>i===0||v!==''||a.length>1)).filter(r=>r.some(Boolean));
@@ -72,7 +100,7 @@ function makeMeasurementsFromLines(lines=[]){
       const value=safeMetricValue(rows[j]);
       if(!value)continue;
       if(/^(pool measurements|mediciones|go back|volver)$/i.test(value))continue;
-      if(/^-?\d+(?:[.,]\d+)?(?:\s*°?c|\s*ppm|\s*mg\/l|\s*ntu|\s*µs\/cm)?$/i.test(value)||/\b\d{1,2}:\d{2}\b/.test(value)||/\b\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}\b/.test(value))values.push(value);
+      if(/^-?\d+(?:[.,]\d+)?(?:\s*°?c|\s*ppm|\s*mg\/l|\s*(?:ntu|unf|fnu|unt)|\s*µs\/cm)?$/i.test(value)||/\b\d{1,2}:\d{2}\b/.test(value)||/\b\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}\b/.test(value))values.push(value);
       if(values.length>=3)break;
     }
     if(values.length){found.push({label,values});maxValues=Math.max(maxValues,values.length);}
@@ -162,7 +190,7 @@ function mergePools(list=[]){
       const sig=JSON.stringify((m.metrics||[]).map(x=>[norm(x.label),clean(x.value)]));if(!target.measurements.some(x=>JSON.stringify((x.metrics||[]).map(y=>[norm(y.label),clean(y.value)]))===sig))target.measurements.push(m);
     }
   }
-  return [...map.values()].filter(p=>p.measurements.some(m=>(m.metrics||[]).length));
+  return [...map.values()].filter(p=>p.measurements.some(m=>(m.metrics||[]).length)).map(p=>{const measurements=repairRecirculationMeasurements(p.measurements);const latest=measurements.find(m=>/ultima|última|last/i.test(clean(m.measurement)))||measurements[0]||{};const temperature=latest.temperature??temperatureFromMetrics(latest.metrics||[]);return {...p,measurements,latest,temperature};});
 }
 async function scrapePools(page){
   const network=await collectNetworkResponses(page);
