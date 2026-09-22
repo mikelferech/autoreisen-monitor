@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import {chromium} from 'playwright';
 import {daysBetween,isoNow,moneyText,postResult,readLatest,sendTelegram,successfulResultToday} from './lib.mjs';
-import {monitorAutoReisen,scanAutoReisenFleet} from './autoreisen.mjs';
+import {bestFleetVehicle,filterFleetForTracking,monitorAutoReisen,scanAutoReisenFleet} from './autoreisen.mjs';
 
 const document=JSON.parse(await fs.readFile(new URL('./config.json',import.meta.url),'utf8'));
 
@@ -13,7 +13,7 @@ async function launchAutoReisenBrowser(){
   }
 }
 
-const defaults={enabled:true,telegramEnabled:true,telegramNotifyEveryCheck:true,telegramNotifyPriceDrop:true,telegramNotifyBelowReserved:true,telegramNotifyAvailability:true,telegramNotifyError:true,telegramNotifyRecovery:true,telegramMinDropAmount:0,telegramMinDropPercent:0};
+const defaults={enabled:true,fleetTrackAll:true,fleetTrackGroups:[],telegramEnabled:true,telegramNotifyEveryCheck:true,telegramNotifyPriceDrop:true,telegramNotifyBelowReserved:true,telegramNotifyAvailability:true,telegramNotifyError:true,telegramNotifyRecovery:true,telegramMinDropAmount:0,telegramMinDropPercent:0};
 let config={...defaults,...(document.autoreisen||{})};
 const force=/^(1|true|yes)$/i.test(String(process.env.MFE_FORCE_RUN||''));
 const telegramTest=/^(1|true|yes)$/i.test(String(process.env.MFE_TEST_TELEGRAM||''));
@@ -56,7 +56,19 @@ if(!force&&successfulResultToday(previous.result)){
 
 const browser=await launchAutoReisenBrowser();
 try{
-  const result=await monitorAutoReisen(browser,config);
+  let result=null,fleetScan=null,fleetError='';
+  try{
+    fleetScan=await scanAutoReisenFleet(browser,config);
+    const fullFleet=Array.isArray(fleetScan?.fleet)?fleetScan.fleet:[],selected=bestFleetVehicle(fullFleet,config);
+    if(selected&&Number(selected.total||0)>0){
+      result={...fleetScan,price:Number(selected.total)||0,total:Number(selected.total)||0,pricePerDay:Number(selected.pricePerDay)||0,availability:selected.availability||fleetScan.availability||'Disponible',group:selected.group||config.group,model:selected.model||config.model,carId:selected.carId||config.carId||'',imageUrl:selected.imageUrl||fleetScan.imageUrl||'',fleet:fullFleet,fleetTotalCount:fullFleet.length,fleetSelection:{all:config.fleetTrackAll!==false,groups:Array.isArray(config.fleetTrackGroups)?config.fleetTrackGroups:[]}};
+    }
+  }catch(error){fleetError=error?.message||String(error);console.warn('[autoreisen] No se pudo leer la flota completa; se conserva la consulta del coche reservado.',fleetError);}
+  if(!result){
+    result=await monitorAutoReisen(browser,config);
+    if(fleetScan?.fleet?.length){result.fleet=fleetScan.fleet;result.fleetTotalCount=fleetScan.fleet.length;result.fleetSelection={all:config.fleetTrackAll!==false,groups:Array.isArray(config.fleetTrackGroups)?config.fleetTrackGroups:[]};}
+    if(fleetError)result.fleetWarning=fleetError;
+  }
   const notices=[];const current=Number(result.total||result.price)||0;const prior=Number(previous.result?.total||previous.result?.price)||0;const reserved=Number(config.reservedPrice)||0;
   const hadPreviousError=Boolean(previous.lastError);
   const dropAmount=prior>current?prior-current:0,dropPercent=prior>0?dropAmount/prior*100:0,minDropAmount=Math.max(0,Number(config.telegramMinDropAmount)||0),minDropPercent=Math.max(0,Number(config.telegramMinDropPercent)||0);
@@ -83,6 +95,8 @@ try{
       `${days} ${days===1?'día':'días'} · ${formatPoint(config.pickupAt)} → ${formatPoint(config.dropoffAt)}`,
       `Disponibilidad: ${result.availability||'Disponible'}`
     ];
+    const fleetRows=filterFleetForTracking((Array.isArray(result.fleet)?result.fleet:[]),config).filter(x=>Number(x?.total||0)>0).sort((a,b)=>Number(a.total)-Number(b.total));
+    if(fleetRows.length){const cheapest=fleetRows[0];lines.push(`Flota visible: ${fleetRows.length} vehículos${result.fleetTotalCount&&result.fleetTotalCount!==fleetRows.length?` de ${result.fleetTotalCount}`:''}`);lines.push(`Más barato: Grupo ${cheapest.group} · ${cheapest.model} · ${moneyText(cheapest.total)}`);}
     try{await sendTelegram(lines.join('\n'));}catch(error){console.error('Telegram:',error.message);process.exitCode=1;}
   }
   console.log('[autoreisen] OK',result);
