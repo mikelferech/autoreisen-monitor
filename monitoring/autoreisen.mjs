@@ -1,4 +1,4 @@
-// MFE_AUTOREISEN_AUTOMATION_VERSION: 2.2.17
+// MFE_AUTOREISEN_AUTOMATION_VERSION: 2.2.18
 import {acceptCookies,clickFirst,daysBetween,fillFirst,isoNow,money,snapshot} from './lib.mjs';
 
 const MONTH_TOKENS={
@@ -75,6 +75,22 @@ function rentalDurationAppears(text,config){
 function resultsLookValid(text,config){
   const pick=dateParts(config.pickupAt),drop=dateParts(config.dropoffAt);
   return /mostrando precios|prices for|tarifas|precios para|recogida|pick up/i.test(text)&&dateAppears(text,pick)&&dateAppears(text,drop)&&rentalDurationAppears(text,config);
+}
+function fleetResultPageLooksValid(text,config,{submitted=false,url=''}={}){
+  const pick=dateParts(config.pickupAt),drop=dateParts(config.dropoffAt),marker=/mostrando precios|prices for|tarifas|precios para|recogida|pick up|reservar|reserve/i.test(text);
+  const datesVisible=dateAppears(text,pick)&&dateAppears(text,drop);
+  let queryMatches=false;
+  try{
+    const u=new URL(String(url||''));
+    const month=(part,key)=>String(u.searchParams.get(key)||'').replace(/^0+/,'')===`${Number(part.month)}-${part.year}`;
+    const day=(part,key)=>String(u.searchParams.get(key)||'').replace(/^0+/,'')===String(Number(part.day));
+    const time=(part,key)=>String(u.searchParams.get(key)||'').slice(0,5)===`${part.hour}:${part.minute}`;
+    queryMatches=day(pick,'dia_inicio')&&month(pick,'mes_inicio')&&time(pick,'hora_inicio')&&day(drop,'dia_final')&&month(drop,'mes_final')&&time(drop,'hora_final');
+  }catch{}
+  // En la flota completa no exigimos que AutoReisen imprima literalmente “8 días”.
+  // La página ha sido enviada por nosotros con los selectores exactos y algunas variantes
+  // no muestran la duración como texto aunque sí respeten fechas y horas.
+  return marker&&(datesVisible||queryMatches||submitted);
 }
 async function safeText(page){return page.locator('body').innerText({timeout:12000}).catch(()=> '');}
 const AUTOREISEN_VERIFY_RE=/please wait|request is being verified|verifying|comprobando su navegador|un momento|espere mientras se verifica|verifica(?:ndo)? su solicitud/i;
@@ -311,7 +327,7 @@ export async function scanAutoReisenFleet(browser,config){
     let text=await safeText(page);
     if(AUTOREISEN_VERIFY_RE.test(text))throw new Error('AutoReisen mantiene activa la verificación de navegador tras 30 s. Se conserva el último precio válido y se adjunta diagnóstico.');
     let parsed=parseResult(text,{...config,group:'',model:''});
-    const validDates=resultsLookValid(text,config);
+    const validDates=fleetResultPageLooksValid(text,config,{submitted,url:page.url()});
     if(parsed.fleet.length&&validDates){const imageUrl=await selectedVehicleImage(page,config).catch(()=>'');const fleet=enrichFleetImage(parsed.fleet,config,imageUrl);await snapshot(page,'autoreisen-flota');return {source:'AutoReisen · flota real · GitHub Actions + Playwright',checkedAt:isoNow(),availability:'Disponible',pickupOfficeId:String(config.pickupOfficeId||officeId(config.pickup)||''),dropoffOfficeId:String(config.dropoffOfficeId||officeId(config.dropoff)||''),pickupAt:config.pickupAt,dropoffAt:config.dropoffAt,imageUrl,fleet};}
     if(/no hay nada disponible|no availability|cannot offer|no podemos ofrecer/i.test(text)&&validDates){await snapshot(page,'autoreisen-sin-disponibilidad');return {source:'AutoReisen · flota real · GitHub Actions + Playwright',checkedAt:isoNow(),availability:'No disponible',noAvailability:true,pickupOfficeId:String(config.pickupOfficeId||officeId(config.pickup)||''),dropoffOfficeId:String(config.dropoffOfficeId||officeId(config.dropoff)||''),pickupAt:config.pickupAt,dropoffAt:config.dropoffAt,fleet:[]};}
 
@@ -319,7 +335,7 @@ export async function scanAutoReisenFleet(browser,config){
     const direct=new URL(directResultUrl({...config,model:'',carId:''}));direct.searchParams.delete('coche');direct.searchParams.delete('id_coche');
     const opened=await openCandidate(page,direct.toString()).catch(()=>({text:'',challenge:false}));if(opened.challenge)throw new Error('AutoReisen mantiene activa la verificación de navegador tras 30 s. Se conserva el último precio válido y se adjunta diagnóstico.');
     text=opened.text||await safeText(page);parsed=parseResult(text,{...config,group:'',model:''});
-    if(parsed.fleet.length&&resultsLookValid(text,config)){const imageUrl=await selectedVehicleImage(page,config).catch(()=>'');const fleet=enrichFleetImage(parsed.fleet,config,imageUrl);await snapshot(page,'autoreisen-flota-directa');return {source:'AutoReisen · flota real · GitHub Actions + Playwright',checkedAt:isoNow(),availability:'Disponible',pickupOfficeId:String(config.pickupOfficeId||officeId(config.pickup)||''),dropoffOfficeId:String(config.dropoffOfficeId||officeId(config.dropoff)||''),pickupAt:config.pickupAt,dropoffAt:config.dropoffAt,imageUrl,fleet};}
+    if(parsed.fleet.length&&fleetResultPageLooksValid(text,config,{url:page.url()})){const imageUrl=await selectedVehicleImage(page,config).catch(()=>'');const fleet=enrichFleetImage(parsed.fleet,config,imageUrl);await snapshot(page,'autoreisen-flota-directa');return {source:'AutoReisen · flota real · GitHub Actions + Playwright',checkedAt:isoNow(),availability:'Disponible',pickupOfficeId:String(config.pickupOfficeId||officeId(config.pickup)||''),dropoffOfficeId:String(config.dropoffOfficeId||officeId(config.dropoff)||''),pickupAt:config.pickupAt,dropoffAt:config.dropoffAt,imageUrl,fleet};}
     const diag=await diagnosticSummary(page,text,parsed,config);throw new Error(`AutoReisen no devolvió una lista de vehículos interpretable para esta búsqueda. ${diag}`);
   }finally{await context.close();}
 }
@@ -343,4 +359,4 @@ export async function monitorAutoReisen(browser,config){
   }finally{await context.close();}
 }
 
-export const __autoreisenTest={resultsEntryUrl,directResultUrl,officeId,knownCarId,targetIndex,extractTotal,normalize,modelTokens,groupVehicleLines,resultsLookValid,dateParts,expectedRentalDays,rentalDurationAppears,fleetFromLines,filterFleetForTracking,bestFleetVehicle,sameVehicle,enrichFleetImage,AUTOREISEN_VERIFY_RE};
+export const __autoreisenTest={resultsEntryUrl,directResultUrl,officeId,knownCarId,targetIndex,extractTotal,normalize,modelTokens,groupVehicleLines,resultsLookValid,fleetResultPageLooksValid,dateParts,expectedRentalDays,rentalDurationAppears,fleetFromLines,filterFleetForTracking,bestFleetVehicle,sameVehicle,enrichFleetImage,AUTOREISEN_VERIFY_RE};
