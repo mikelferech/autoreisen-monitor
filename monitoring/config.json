@@ -40,7 +40,9 @@
     "scheduleTimeZone": "Europe/Madrid",
     "pickupOfficeId": "18",
     "dropoffOfficeId": "18",
-    "carId": "119"
+    "carId": "119",
+    "fleetTrackAll": true,
+    "fleetTrackGroups": []
   },
   "cordial": {
     "hotel": "Cordial Santa Águeda & Perchel Beach Club",
