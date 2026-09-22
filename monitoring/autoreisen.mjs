@@ -1,4 +1,4 @@
-// MFE_AUTOREISEN_AUTOMATION_VERSION: 2.2.15
+// MFE_AUTOREISEN_AUTOMATION_VERSION: 2.2.17
 import {acceptCookies,clickFirst,daysBetween,fillFirst,isoNow,money,snapshot} from './lib.mjs';
 
 const MONTH_TOKENS={
@@ -262,8 +262,38 @@ async function selectedVehicleImage(page,config={}){
     return await bestVisualUrl(detail);
   }catch{return '';}finally{await detail.close().catch(()=>{});}
 }
-function fleetFromLines(lines){const out=[],seen=new Set();for(const line of lines){const m=String(line).match(/^([A-Z0-9]{1,3})\s*[-–—:]\s*(.+?)(?:\s+([0-9]{1,4}(?:[.,][0-9]{1,2}))\s*€\s*\/\s*d[ií]a|$)/i);if(!m)continue;const group=m[1].trim(),model=m[2].trim().replace(/\s+/g,' ');if(!model||model.length>130)continue;const key=`${group}\u0000${normalize(model)}`;if(seen.has(key))continue;seen.add(key);out.push({group,model,carId:knownCarId(model)});}return out;}
-function parseResult(text,config){const lines=text.split(/\n+/).map(x=>x.trim()).filter(Boolean),index=targetIndex(lines,config),total=extractTotal(lines,index);return {lines,index,total,found:groupVehicleLines(lines,config.group),fleet:fleetFromLines(lines)};}
+function fleetFromLines(lines,config={}){
+  const out=[],seen=new Set(),days=expectedRentalDays(config),vehicleRe=/^([A-Z0-9]{1,3})\s*[-–—:]\s*(.+?)(?:\s+([0-9]{1,4}(?:[.,][0-9]{1,2}))\s*€\s*\/\s*d[ií]a|$)/i;
+  for(let index=0;index<lines.length;index++){
+    const m=String(lines[index]).match(vehicleRe);if(!m)continue;
+    const group=m[1].trim(),model=m[2].trim().replace(/\s+/g,' ');if(!model||model.length>130)continue;
+    const key=`${group}\u0000${normalize(model)}`;if(seen.has(key))continue;seen.add(key);
+    const pricePerDay=Number(String(m[3]||'').replace(',','.'))||0;
+    let next=index+1;while(next<lines.length&&!vehicleRe.test(String(lines[next])))next++;
+    const vehicleBlock=lines.slice(index,next);let total=extractTotal(vehicleBlock,0);
+    // Si la página solo expone €/día, calculamos el total según los periodos de 24 h que ya usa el monitor.
+    if(pricePerDay>0&&(total<=0||Math.abs(total-pricePerDay)<0.02))total=Math.round(pricePerDay*days*100)/100;
+    out.push({group,model,carId:knownCarId(model),pricePerDay,total:total>0?total:0,availability:'Disponible'});
+  }
+  return out;
+}
+function parseResult(text,config){const lines=text.split(/\n+/).map(x=>x.trim()).filter(Boolean),index=targetIndex(lines,config),total=extractTotal(lines,index);return {lines,index,total,found:groupVehicleLines(lines,config.group),fleet:fleetFromLines(lines,config)};}
+function selectedFleetGroups(config={}){return [...new Set((Array.isArray(config.fleetTrackGroups)?config.fleetTrackGroups:[]).map(x=>String(x||'').trim()).filter(Boolean))];}
+export function filterFleetForTracking(fleet=[],config={}){
+  const rows=Array.isArray(fleet)?fleet:[];if(config.fleetTrackAll!==false)return rows;
+  const groups=selectedFleetGroups(config);if(!groups.length&&config.group)groups.push(String(config.group).trim());const wanted=new Set(groups.map(normalize));
+  return rows.filter(row=>wanted.has(normalize(row?.group||'')));
+}
+export function bestFleetVehicle(fleet=[],config={}){
+  const rows=Array.isArray(fleet)?fleet:[],wanted=modelTokens(config.model||''),group=normalize(config.group||'').replace(/\s+/g,'');
+  let best=null,bestScore=-1;
+  for(const row of rows){const text=normalize(row?.model||''),rowTokens=modelTokens(row?.model||''),sameGroup=Boolean(group)&&normalize(row?.group||'').replace(/\s+/g,'')===group;let score=sameGroup?20:0;
+    if(wanted.length){const matched=wanted.filter(token=>rowTokens.includes(token)||text.includes(token)).length;score+=matched*25;if(matched===wanted.length)score+=120;}
+    if(String(config.carId||'')&&String(row?.carId||'')===String(config.carId))score+=180;
+    if(score>bestScore){best=row;bestScore=score;}
+  }
+  return bestScore>=20?best:null;
+}
 async function diagnosticSummary(page,text,parsed,config){
   const heading=text.split(/\n+/).map(x=>x.trim()).filter(Boolean).filter(x=>/mostrando precios|prices for|recogida|pick up|nueva b.squeda|new search/i.test(x)).slice(0,4).join(' | ');
   const found=parsed.found.length?` Vehículos grupo ${config.group}: ${parsed.found.join(' | ')}`:'';const formState=await formStateSummary(page);return `URL final: ${page.url()}.${heading?` Página: ${heading}.`:''}${found}${formState?` Formulario: ${formState}`:''}`;
@@ -313,4 +343,4 @@ export async function monitorAutoReisen(browser,config){
   }finally{await context.close();}
 }
 
-export const __autoreisenTest={resultsEntryUrl,directResultUrl,officeId,knownCarId,targetIndex,extractTotal,normalize,modelTokens,groupVehicleLines,resultsLookValid,dateParts,expectedRentalDays,rentalDurationAppears,fleetFromLines,sameVehicle,enrichFleetImage,AUTOREISEN_VERIFY_RE};
+export const __autoreisenTest={resultsEntryUrl,directResultUrl,officeId,knownCarId,targetIndex,extractTotal,normalize,modelTokens,groupVehicleLines,resultsLookValid,dateParts,expectedRentalDays,rentalDurationAppears,fleetFromLines,filterFleetForTracking,bestFleetVehicle,sameVehicle,enrichFleetImage,AUTOREISEN_VERIFY_RE};
