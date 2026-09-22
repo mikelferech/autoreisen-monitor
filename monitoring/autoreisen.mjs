@@ -1,4 +1,4 @@
-// MFE_AUTOREISEN_AUTOMATION_VERSION: 2.2.20
+// MFE_AUTOREISEN_AUTOMATION_VERSION: 2.2.22
 import {acceptCookies,clickFirst,daysBetween,fillFirst,isoNow,money,snapshot} from './lib.mjs';
 
 const MONTH_TOKENS={
@@ -286,32 +286,64 @@ async function fleetImagesFromDom(page,fleet=[]){
     const norm=v=>String(v||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
     const stop=new Set(['o','or','similar','tsi','reference','automatic','family','hybrid','pax','puretech','connect']);
     const wanted=items.map((row,index)=>({index,group:norm(row.group),model:norm(row.model),tokens:norm(row.model).split(' ').filter(t=>t.length>1&&!stop.has(t))}));
-    const best=new Map();
     const bad=/\b(?:ico|icon|logo|magnifier|lupa|facebook|twitter|youtube|instagram|spinner|loading|cookie|flag|bandera|mp3|air|ac-|puerta|plaza|direccion)\b/i;
-    const scoreImage=(img,row,text)=>{let score=0;const src=String(img.currentSrc||img.src||'');if(!/^https?:/i.test(src)||bad.test(src))return null;const rect=img.getBoundingClientRect(),w=Math.max(img.naturalWidth||0,rect.width||0),h=Math.max(img.naturalHeight||0,rect.height||0);if(w>=180&&h>=80)score+=35;if(w>h*1.1)score+=18;const n=norm(text);const matched=row.tokens.filter(t=>n.includes(t)).length;if(row.tokens.length&&matched===row.tokens.length)score+=140;else score+=matched*28;if(row.group&&new RegExp(`(?:^| )${row.group}(?: |$)`).test(n))score+=18;if(/coche|car|vehic|flota|fleet/.test(n))score+=10;return score>35?{url:new URL(src,location.href).href,score}:null;};
+    const candidates=[];
     for(const img of document.images){
-      let node=img;const contexts=[];for(let depth=0;node&&depth<7;depth++,node=node.parentElement){const text=String(node.innerText||node.textContent||'').replace(/\s+/g,' ').trim();if(text&&text.length<3200)contexts.push(text);if(text.length>3200)break;}
-      const context=contexts.join(' | ');if(!context)continue;
-      for(const row of wanted){const candidate=scoreImage(img,row,context);if(!candidate)continue;const prev=best.get(row.index);if(!prev||candidate.score>prev.score)best.set(row.index,candidate);}
+      const raw=String(img.currentSrc||img.src||'').trim();if(!raw)continue;let src='';try{src=new URL(raw,location.href).href;}catch{continue;}if(!/^https?:/i.test(src)||bad.test(src))continue;
+      const rect=img.getBoundingClientRect(),w=Math.max(img.naturalWidth||0,rect.width||0),h=Math.max(img.naturalHeight||0,rect.height||0);if(w<120||h<55)continue;
+      let node=img,localText='';
+      for(let depth=0;node&&depth<6;depth++,node=node.parentElement){const text=String(node.innerText||node.textContent||'').replace(/\s+/g,' ').trim();if(text&&text.length<=1100){localText=text;if(text.length>=25)break;}}
+      const n=norm(`${localText} ${img.alt||''} ${img.title||''}`);if(!n)continue;
+      for(const row of wanted){const matched=row.tokens.filter(t=>n.includes(t)).length;const exact=row.tokens.length>0&&matched===row.tokens.length;const sufficient=row.tokens.length===1?matched===1:matched>=Math.min(2,row.tokens.length);if(!exact&&!sufficient)continue;let score=matched*70+(exact?180:0);if(row.group&&new RegExp(`(?:^| )${row.group}(?: |$)`).test(n))score+=25;if(w>=180&&h>=80)score+=30;if(w>h*1.1)score+=15;if(/coche|car|vehic|flota|fleet/.test(n))score+=10;candidates.push({index:row.index,url:src,score});}
     }
-    return [...best.entries()].map(([index,value])=>({index,...value}));
+    candidates.sort((a,b)=>b.score-a.score);const assignedRows=new Set(),usedUrls=new Set(),out=[];
+    for(const candidate of candidates){if(assignedRows.has(candidate.index)||usedUrls.has(candidate.url))continue;assignedRows.add(candidate.index);usedUrls.add(candidate.url);out.push(candidate);}
+    return out;
   },fleet.map(row=>({group:row.group,model:row.model}))).catch(()=>[]);
   return new Map(rows.map(row=>[Number(row.index),String(row.url||'')]).filter(([,url])=>url));
 }
+async function fleetLightboxesFromDom(page,fleet=[]){
+  if(!Array.isArray(fleet)||!fleet.length)return new Map();
+  const rows=await page.evaluate(items=>{
+    const norm=v=>String(v||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+    const stop=new Set(['o','or','oder','ou','similar','similaire','similarer','similaren','similarmente','tsi','reference','automatic','family','hybrid','pax','puretech','connect','auto']);
+    const wanted=items.map((row,index)=>({index,group:norm(row.group),model:norm(row.model),tokens:norm(row.model).split(' ').filter(t=>t.length>1&&!stop.has(t))}));
+    const candidates=[];
+    for(const anchor of document.querySelectorAll('a[href*="lightbox01.php"],a[href*="lightbox" i]')){
+      const href=String(anchor.href||'').trim();if(!href)continue;
+      let node=anchor,bestText='';
+      for(let depth=0;node&&depth<9;depth++,node=node.parentElement){const text=String(node.innerText||node.textContent||'').replace(/\s+/g,' ').trim();if(text&&text.length<=1800){bestText=text;if(text.length>=20)break;}}
+      const n=norm(bestText);if(!n)continue;
+      for(const row of wanted){const matched=row.tokens.filter(t=>n.includes(t)).length;const exact=row.tokens.length>0&&matched===row.tokens.length;const enough=row.tokens.length<=2?matched===row.tokens.length:matched>=Math.min(2,row.tokens.length);if(!exact&&!enough)continue;let score=matched*90+(exact?260:0);if(row.group&&new RegExp(`(?:^| )${row.group}(?: |$)`).test(n))score+=35;if(/reservar|reserve|precio|dia|día/.test(n))score+=20;candidates.push({index:row.index,url:href,score});}
+    }
+    candidates.sort((a,b)=>b.score-a.score);const out=[],usedRows=new Set(),usedUrls=new Set();for(const row of candidates){if(usedRows.has(row.index)||usedUrls.has(row.url))continue;usedRows.add(row.index);usedUrls.add(row.url);out.push(row);}return out;
+  },fleet.map(row=>({group:row.group,model:row.model}))).catch(()=>[]);
+  return new Map(rows.map(row=>[Number(row.index),String(row.url||'')]).filter(([,url])=>url));
+}
+async function imageFromLightboxUrl(page,url=''){
+  const href=String(url||'').trim();if(!href)return '';
+  const detail=await page.context().newPage();try{await detail.goto(href,{waitUntil:'domcontentloaded',timeout:30000});await detail.waitForTimeout(850);return await bestVisualUrl(detail);}catch{return '';}finally{await detail.close().catch(()=>{});}
+}
 async function enrichFleetImages(page,fleet=[],config={},selectedImage=''){
-  const rows=(Array.isArray(fleet)?fleet:[]).map(row=>({...row}));
-  const images=await fleetImagesFromDom(page,rows).catch(()=>new Map());
-  rows.forEach((row,index)=>{const url=images.get(index);if(url)row.imageUrl=url;});
-  // AutoReisen suele cargar la foto de muchos modelos detrás de un lightbox. Si la miniatura
-  // no está directamente en el DOM, resolvemos cada vehículo por su nombre exacto para que
-  // la app pueda mostrar una foto en todas las fichas de la flota.
+  const rows=(Array.isArray(fleet)?fleet:[]).map(row=>({...row,imageUrl:''}));
+  const images=await fleetImagesFromDom(page,rows).catch(()=>new Map()),usedUrls=new Set();
+  rows.forEach((row,index)=>{const url=String(images.get(index)||'').trim();if(url&&!usedUrls.has(url)){row.imageUrl=url;usedUrls.add(url);}});
+  // AutoReisen enlaza cada ficha a un lightbox distinto. Resolvemos esos enlaces en lote
+  // para obtener la foto real del modelo incluso cuando la miniatura no está expuesta como <img>.
+  const lightboxes=await fleetLightboxesFromDom(page,rows).catch(()=>new Map());
+  for(let index=0;index<rows.length;index++){if(String(rows[index]?.imageUrl||'').trim())continue;const href=String(lightboxes.get(index)||'').trim();if(!href)continue;const url=String(await imageFromLightboxUrl(page,href).catch(()=>'' )||'').trim();if(url&&!usedUrls.has(url)){rows[index].imageUrl=url;usedUrls.add(url);}}
+  // Si una miniatura no está en el DOM, buscamos el lightbox por el nombre exacto del modelo.
+  // Una misma URL nunca se puede asignar a dos coches: es preferible dejar una ficha sin foto
+  // que repetir incorrectamente la imagen de otro modelo.
   for(let index=0;index<rows.length;index++){
-    if(String(rows[index]?.imageUrl||'').trim())continue;
-    const row=rows[index];
-    const url=await selectedVehicleImage(page,{...config,group:row.group,model:row.model,carId:row.carId||'',strictModel:true}).catch(()=>'');
-    if(url)rows[index].imageUrl=url;
+    if(String(rows[index]?.imageUrl||'').trim())continue;const row=rows[index];
+    const url=String(await selectedVehicleImage(page,{...config,group:row.group,model:row.model,carId:row.carId||'',strictModel:true}).catch(()=>'')||'').trim();
+    if(url&&!usedUrls.has(url)){rows[index].imageUrl=url;usedUrls.add(url);}
   }
-  return enrichFleetImage(rows,config,selectedImage);
+  const selectedUrl=String(selectedImage||'').trim();if(selectedUrl&&!usedUrls.has(selectedUrl)){
+    const selected=rows.find(row=>sameVehicle(row,config));if(selected&&!String(selected.imageUrl||'').trim()){selected.imageUrl=selectedUrl;usedUrls.add(selectedUrl);}
+  }
+  return rows;
 }
 function fleetFromLines(lines,config={}){
   const out=[],seen=new Set(),days=expectedRentalDays(config),vehicleRe=/^([A-Z0-9]{1,3})\s*[-–—:]\s*(.+?)(?:\s+([0-9]{1,4}(?:[.,][0-9]{1,2}))\s*€\s*\/\s*d[ií]a|$)/i;
@@ -394,4 +426,4 @@ export async function monitorAutoReisen(browser,config){
   }finally{await context.close();}
 }
 
-export const __autoreisenTest={resultsEntryUrl,directResultUrl,officeId,knownCarId,targetIndex,extractTotal,normalize,modelTokens,groupVehicleLines,resultsLookValid,fleetResultPageLooksValid,dateParts,expectedRentalDays,rentalDurationAppears,fleetFromLines,filterFleetForTracking,bestFleetVehicle,sameVehicle,enrichFleetImage,fleetImagesFromDom,enrichFleetImages,AUTOREISEN_VERIFY_RE};
+export const __autoreisenTest={resultsEntryUrl,directResultUrl,officeId,knownCarId,targetIndex,extractTotal,normalize,modelTokens,groupVehicleLines,resultsLookValid,fleetResultPageLooksValid,dateParts,expectedRentalDays,rentalDurationAppears,fleetFromLines,filterFleetForTracking,bestFleetVehicle,sameVehicle,enrichFleetImage,fleetImagesFromDom,fleetLightboxesFromDom,enrichFleetImages,AUTOREISEN_VERIFY_RE};
