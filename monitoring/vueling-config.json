@@ -32,7 +32,7 @@
     "passenger2FirstName": "Prueba",
     "passenger2LastName": "fghshfg",
     "marketingConsent": false,
-    "reservedPrice": 337.96,
+    "reservedPrice": 0,
     "telegramEnabled": false,
     "telegramNotifyEveryCheck": false,
     "telegramNotifyPriceDrop": false,
