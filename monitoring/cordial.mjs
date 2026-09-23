@@ -1,4 +1,4 @@
-// MFE_CORDIAL_AUTOMATION_VERSION: 2.2.11
+// MFE_CORDIAL_AUTOMATION_VERSION: 2.2.12
 import {isoNow,snapshot,acceptCookies} from './lib.mjs';
 
 const normalize=value=>String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/\s+/g,' ').trim();
@@ -92,11 +92,26 @@ function targetMatches(row,config){
   const room=normalize(config.targetRoom||'Classic Duplex'),rate=normalize(config.targetRate||'Club Cordial - Reserva Online'),board=normalize(config.targetBoard||'SOLO ALOJAMIENTO');
   return (!room||normalize(row.roomType).includes(room))&&(!rate||normalize(row.rateName).includes(rate))&&(!board||normalize(row.board).includes(board));
 }
+function reservationOnline(row){
+  const rate=normalize(row?.rateName||''),room=normalize(row?.roomType||'');
+  return (rate.includes('reserva online')||room.includes('reserva online'))&&!rate.includes('prepago')&&!room.includes('prepago');
+}
 function positiveCancellation(row){
+  // «Club Cordial - Reserva Online» es la opción flexible/sin gastos. El motor
+  // ha mezclado en ocasiones el texto de cancelación de la fila Prepago anterior.
+  if(reservationOnline(row))return true;
   const text=normalize(row?.cancellation||'');
   if(!text)return false;
   if(/no reembolsable|con gastos/.test(text))return false;
-  return /cancelacion gratuita|reembolsable|cancelacion/.test(text);
+  return /cancelacion gratuita|reembolsable|sin gastos|cancelacion/.test(text);
+}
+function normalizeCancellationLabels(rows=[]){
+  return (Array.isArray(rows)?rows:[]).map(row=>{
+    if(!row||typeof row!=='object'||!reservationOnline(row))return row;
+    const current=normalize(row.cancellation||'');
+    if(!current||/con gastos|gastos de cancelacion/.test(current))return {...row,cancellation:'Cancelación sin gastos'};
+    return row;
+  });
 }
 function selectTargetOption(options=[],config={}){
   const exact=options.find(row=>targetMatches(row,config));
@@ -1030,7 +1045,7 @@ export async function monitorCordial(browser,config={}){
     const headings=await page.locator('h1,h2,h3,h4,h5,h6').allTextContents().catch(()=>[]);
     const domParsed=await parseCordialDom(page,headings,config);
     const textOptions=parseCordialText(body,headings,config);
-    const options=mergeCordialOptions(domParsed.rows,textOptions);
+    const options=normalizeCancellationLabels(mergeCordialOptions(domParsed.rows,textOptions));
     const roomMeta=await extractRoomMeta(page);
     console.log(`[cordial] Parser combinado: DOM=${domParsed.rows.length} · texto=${textOptions.length} · final=${options.length} · fichas habitación=${Object.values(roomMeta||{}).filter(x=>x?.imageUrl||x?.detailUrl).length}.`);
     if(!options.length){await snapshot(page,'cordial-sin-opciones');const d=await diagnostic(page);throw new Error(`Cordial abrió el motor de reservas, pero no se pudieron interpretar tarifas. Se analizaron ${domParsed.contexts.length} botones Reservar. ${d}`);}
@@ -1042,4 +1057,4 @@ export async function monitorCordial(browser,config={}){
   }finally{await context.close();}
 }
 
-export const __cordialTest={parseCordialText,parseReserveContext,targetMatches,selectTargetOption,mergeCordialOptions,normalize,fillDateInputs,forceControlValue,syncVisibleDateRange,submitSearch,formState,stabilizeBookingControls,bookingResultReady,roomRatesReady,destinationHotelListReady};
+export const __cordialTest={parseCordialText,parseReserveContext,targetMatches,selectTargetOption,mergeCordialOptions,normalizeCancellationLabels,reservationOnline,positiveCancellation,normalize,fillDateInputs,forceControlValue,syncVisibleDateRange,submitSearch,formState,stabilizeBookingControls,bookingResultReady,roomRatesReady,destinationHotelListReady};
