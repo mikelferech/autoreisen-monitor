@@ -79,6 +79,17 @@
         "destination": "LPA",
         "from": "Bilbao (BIO)",
         "to": "Gran Canaria (LPA)"
+      },
+      {
+        "id": "flight-back",
+        "number": "VY3271",
+        "date": "2027-09-20",
+        "departure": "2027-09-20T16:40",
+        "arrival": "2027-09-20T20:45",
+        "origin": "LPA",
+        "destination": "BIO",
+        "from": "Gran Canaria (LPA)",
+        "to": "Bilbao (BIO)"
       }
     ]
   }
