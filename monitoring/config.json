@@ -72,9 +72,9 @@
       {
         "id": "flight-out",
         "number": "VY3272",
-        "date": "2026-09-14",
-        "departure": "2026-09-14T06:50",
-        "arrival": "2026-09-14T09:05",
+        "date": "2027-09-13",
+        "departure": "2027-09-13T06:50",
+        "arrival": "2027-09-20T09:05",
         "origin": "BIO",
         "destination": "LPA",
         "from": "Bilbao (BIO)",
