@@ -158,9 +158,12 @@ function aenaRowOtherAirport(r={}){return upper(r.iataOtro||r.aeropuertoIataOtro
 function scoreAenaRow(r={},flight={},mode='departure'){
   const targetDigits=digitsOnly(flight.number),rowDigits=digitsOnly(aenaRowFlightNumber(r));
   if(!targetDigits||targetDigits!==rowDigits)return -1;
-  let score=10;
   const expectedDate=dateEsFromIso(localDate(flight.date||flight.departure));
-  const rowDate=aenaRowDate(r);if(expectedDate&&rowDate&&normalize(expectedDate)===normalize(rowDate))score+=6;
+  const rowDate=aenaRowDate(r);
+  // La API de Aena devuelve vuelos de una ventana corta. Nunca aceptamos el mismo
+  // número/ruta si la fecha completa (incluido el año) no coincide exactamente.
+  if(!expectedDate||!rowDate||normalize(expectedDate)!==normalize(rowDate))return -1;
+  let score=16;
   const expectedOther=airportCode(mode==='departure'?(flight.destination||flight.to):(flight.origin||flight.from));
   const rowOther=aenaRowOtherAirport(r);if(expectedOther&&rowOther===expectedOther)score+=4;
   const expectedTime=localTime(mode==='departure'?flight.departure:flight.arrival),rowTime=aenaRowScheduled(r);if(expectedTime&&rowTime&&rowTime.startsWith(expectedTime))score+=3;
