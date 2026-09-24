@@ -13,6 +13,7 @@ function intervalForFlight(flight,now=Date.now()){
   if(!Number.isFinite(dep))return Infinity;
   const until=dep-now;
   if(Number.isFinite(arr)&&now>arr+3*3600000)return Infinity;
+  if(until>14*24*3600000)return Infinity;
   if(until>24*3600000)return 6*3600000;
   if(until>4*3600000)return 60*60000;
   return 10*60000;
