@@ -111,6 +111,24 @@ jobs:
         with:
           credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_MFE_VIAJES || secrets.FIREBASE_SERVICE_ACCOUNT_PRESUPUESTO_HOGAR_9DEAD }}
 
+      - name: Configurar vínculo de la APK Android
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RELEASE_DIR/public/.well-known"
+          cat > "$RELEASE_DIR/public/.well-known/assetlinks.json" <<'EOF'
+          [{
+            "relation": ["delegate_permission/common.handle_all_urls"],
+            "target": {
+              "namespace": "android_app",
+              "package_name": "com.mikelferech.mfeviajes",
+              "sha256_cert_fingerprints": [
+                "05:E5:7D:A6:FE:85:37:B5:C4:37:7F:9F:D3:FE:9D:33:C7:E0:AE:9C:34:D5:35:38:55:FD:29:53:2F:72:3A:76"
+              ]
+            }
+          }]
+          EOF
+
       - name: Publicar Firebase Hosting
         shell: bash
         run: |
