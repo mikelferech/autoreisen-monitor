@@ -31,7 +31,7 @@ jobs:
       - name: Preparar Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "8.10.2"
+          gradle-version: "8.13"
 
       - name: Descargar identidad PWA
         shell: bash
@@ -78,7 +78,7 @@ jobs:
 
           cat > "$ROOT/build.gradle" <<'EOF'
           plugins {
-              id "com.android.application" version "8.7.3" apply false
+              id "com.android.application" version "8.13.0" apply false
           }
           EOF
 
