@@ -1,0 +1,214 @@
+name: Compilar MFE Viajes APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/mfe-apk-build.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Preparar Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Preparar Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Instalar SDK necesario
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Preparar Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+
+      - name: Descargar identidad PWA
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/mfe-apk/app/src/main/res/mipmap-xxxhdpi"
+          curl -fsSL "https://mfe-viajes-2026.web.app/manifest.webmanifest" -o "$RUNNER_TEMP/manifest.webmanifest"
+          curl -fsSL "https://mfe-viajes-2026.web.app/icons/install-icon-512.png" -o "$RUNNER_TEMP/mfe-apk/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png"
+          node - <<'NODE'
+          const fs=require('fs');
+          const m=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/manifest.webmanifest','utf8'));
+          const name=String(m.short_name||m.name||'GC 26').replace(/[<&]/g,'');
+          fs.writeFileSync(process.env.RUNNER_TEMP+'/mfe-name.txt',name);
+          NODE
+
+      - name: Generar proyecto Android TWA
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$RUNNER_TEMP/mfe-apk"
+          APP_NAME="$(cat "$RUNNER_TEMP/mfe-name.txt")"
+          mkdir -p "$ROOT/app/src/main/res/values"
+          mkdir -p "$ROOT/app/src/main/res/xml"
+          mkdir -p "$ROOT/app/src/main"
+
+          cat > "$ROOT/settings.gradle" <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "MFEViajes"
+          include(":app")
+          EOF
+
+          cat > "$ROOT/build.gradle" <<'EOF'
+          plugins {
+              id "com.android.application" version "8.7.3" apply false
+          }
+          EOF
+
+          cat > "$ROOT/app/build.gradle" <<'EOF'
+          plugins {
+              id "com.android.application"
+          }
+
+          android {
+              namespace "com.mikelferech.mfeviajes"
+              compileSdk 35
+
+              defaultConfig {
+                  applicationId "com.mikelferech.mfeviajes"
+                  minSdk 23
+                  targetSdk 35
+                  versionCode 1
+                  versionName "2.4.31"
+              }
+
+              buildTypes {
+                  release {
+                      minifyEnabled false
+                  }
+              }
+          }
+
+          dependencies {
+              implementation "com.google.androidbrowserhelper:androidbrowserhelper:2.7.4"
+          }
+          EOF
+
+          cat > "$ROOT/app/src/main/res/values/strings.xml" <<EOF
+          <resources>
+              <string name="app_name">$APP_NAME</string>
+          </resources>
+          EOF
+
+          cat > "$ROOT/app/src/main/res/values/colors.xml" <<'EOF'
+          <resources>
+              <color name="mfe_background">#111318</color>
+          </resources>
+          EOF
+
+          cat > "$ROOT/app/src/main/res/values/styles.xml" <<'EOF'
+          <resources>
+              <style name="MFETheme" parent="@android:style/Theme.Material.Light.NoActionBar">
+                  <item name="android:windowActionModeOverlay">true</item>
+                  <item name="android:windowNoTitle">true</item>
+                  <item name="android:colorAccent">#111318</item>
+                  <item name="android:navigationBarColor">#111318</item>
+                  <item name="android:statusBarColor">#111318</item>
+                  <item name="android:windowLightStatusBar">false</item>
+              </style>
+          </resources>
+          EOF
+
+          cat > "$ROOT/app/src/main/AndroidManifest.xml" <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+
+              <queries>
+                  <intent>
+                      <action android:name="android.support.customtabs.action.CustomTabsService" />
+                  </intent>
+              </queries>
+
+              <application
+                  android:allowBackup="true"
+                  android:icon="@mipmap/ic_launcher"
+                  android:label="@string/app_name"
+                  android:theme="@style/MFETheme"
+                  android:usesCleartextTraffic="false">
+
+                  <activity
+                      android:name="com.google.androidbrowserhelper.trusted.LauncherActivity"
+                      android:exported="true"
+                      android:label="@string/app_name"
+                      android:theme="@style/MFETheme">
+                      <meta-data
+                          android:name="android.support.customtabs.trusted.DEFAULT_URL"
+                          android:value="https://mfe-viajes-2026.web.app/" />
+                      <meta-data
+                          android:name="android.support.customtabs.trusted.STATUS_BAR_COLOR"
+                          android:resource="@color/mfe_background" />
+                      <meta-data
+                          android:name="android.support.customtabs.trusted.NAVIGATION_BAR_COLOR"
+                          android:resource="@color/mfe_background" />
+                      <meta-data
+                          android:name="android.support.customtabs.trusted.SCREEN_ORIENTATION"
+                          android:value="any" />
+
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.DEFAULT" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+
+                      <intent-filter android:autoVerify="true">
+                          <action android:name="android.intent.action.VIEW" />
+                          <category android:name="android.intent.category.DEFAULT" />
+                          <category android:name="android.intent.category.BROWSABLE" />
+                          <data
+                              android:scheme="https"
+                              android:host="mfe-viajes-2026.web.app" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          echo "ANDROID_ROOT=$ROOT" >> "$GITHUB_ENV"
+
+      - name: Compilar APK release sin firmar
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$ANDROID_ROOT"
+          gradle :app:assembleRelease --stacktrace
+          test -f app/build/outputs/apk/release/app-release-unsigned.apk
+          cp app/build/outputs/apk/release/app-release-unsigned.apk "$RUNNER_TEMP/MFE_Viajes_GC26_unsigned.apk"
+
+      - name: Subir APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: mfe-viajes-apk-unsigned
+          path: ${{ runner.temp }}/MFE_Viajes_GC26_unsigned.apk
+          if-no-files-found: error
+          retention-days: 7
