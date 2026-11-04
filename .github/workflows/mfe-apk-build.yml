@@ -215,3 +215,21 @@ jobs:
           path: ${{ runner.temp }}/MFE_Viajes_GC26_unsigned.apk
           if-no-files-found: error
           retention-days: 7
+
+      - name: Empaquetar apksigner
+        shell: bash
+        run: |
+          set -euo pipefail
+          TOOL="$RUNNER_TEMP/apksigner-tool"
+          mkdir -p "$TOOL/lib"
+          cp /usr/local/lib/android/sdk/build-tools/36.0.0/apksigner "$TOOL/apksigner"
+          cp /usr/local/lib/android/sdk/build-tools/36.0.0/lib/apksigner.jar "$TOOL/lib/apksigner.jar"
+          chmod +x "$TOOL/apksigner"
+
+      - name: Subir apksigner
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apksigner-36
+          path: ${{ runner.temp }}/apksigner-tool
+          if-no-files-found: error
+          retention-days: 7
