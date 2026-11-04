@@ -82,6 +82,11 @@ jobs:
           }
           EOF
 
+          cat > "$ROOT/gradle.properties" <<'EOF'
+          android.useAndroidX=true
+          android.enableJetifier=true
+          EOF
+
           cat > "$ROOT/app/build.gradle" <<'EOF'
           plugins {
               id "com.android.application"
