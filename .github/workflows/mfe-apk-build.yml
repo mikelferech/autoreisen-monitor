@@ -84,7 +84,8 @@ jobs:
 
           cat > "$ROOT/gradle.properties" <<'EOF'
           android.useAndroidX=true
-          android.enableJetifier=true\n          android.suppressUnsupportedCompileSdk=36
+          android.enableJetifier=true
+          android.suppressUnsupportedCompileSdk=36
           EOF
 
           cat > "$ROOT/app/build.gradle" <<'EOF'
