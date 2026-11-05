@@ -25,6 +25,15 @@ try{
   await page.locator('#td-search-00').click({timeout:6000,force:true});
   await page.waitForTimeout(10000);
   console.log('RESULT',JSON.stringify({url:page.url(),pages:context.pages().map(p=>({url:p.url()})),body:(await page.locator('body').innerText()).slice(0,14000),responses:responses.slice(-50)},null,2));
+  for(let ri=0;ri<3;ri++){
+    let allButtons=await page.locator('button').evaluateAll(nodes=>nodes.filter(n=>/Elige habitación/i.test(n.textContent||'')&&n.offsetParent).slice(0,15).map(n=>({outer:n.outerHTML.slice(0,300),parent:n.parentElement?.parentElement?.innerText.slice(0,300)})));
+    console.log('ROOM',ri,'BEFORE',JSON.stringify({buttons:allButtons,body:(await page.locator('body').innerText()).slice(-1500)}));
+    let b=page.getByRole('button',{name:/Elige habitación/i}).first();
+    if(!(await b.count()))break;
+    await b.click({timeout:5000}).catch(e=>console.log('ROOM CLICK ERROR',String(e?.message||e)));
+    await page.waitForTimeout(1300);
+    console.log('ROOM',ri,'AFTER',JSON.stringify({url:page.url(),body:(await page.locator('body').innerText()).slice(-3000)}));
+  }
   for(let i=0;i<context.pages().length;i++){
     const p=context.pages()[i];
     await p.screenshot({path:'artifacts/quote-'+i+'.png',fullPage:true}).catch(()=>{});
