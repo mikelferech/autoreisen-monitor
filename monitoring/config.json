@@ -74,7 +74,7 @@
         "number": "VY3272",
         "date": "2027-09-13",
         "departure": "2027-09-13T06:50",
-        "arrival": "2026-09-13T09:05",
+        "arrival": "2027-09-13T09:05",
         "origin": "BIO",
         "destination": "LPA",
         "from": "Bilbao (BIO)",
@@ -133,5 +133,14 @@
     "targetBoard": "Solo alojamiento",
     "reservedPrice": 0,
     "searchUrl": "https://www.hoteldunasclub.es/reservar.html"
+  },
+  "binterStage2": {
+    "enabled": true,
+    "date": "2027-09-13",
+    "origin": "LPA",
+    "destination": "FUE",
+    "adults": 5,
+    "resident": false,
+    "reservedPrice": 0
   }
 }
