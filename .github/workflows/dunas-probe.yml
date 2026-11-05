@@ -2,7 +2,7 @@ name: MFE Dunas · Diagnóstico motor de reservas
 on:
   push:
     paths:
-      - "monitoring/dunas-probe.mjs"
+      - "monitoring/dunas-search-probe.mjs"
       - ".github/workflows/dunas-probe.yml"
   workflow_dispatch:
 permissions:
