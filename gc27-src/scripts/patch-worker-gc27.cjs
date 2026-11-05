@@ -7,12 +7,11 @@ const file='CLOUDFLARE_WORKER_v2_2_54.js';
 const destination=path.join(root,'gc27-src',file);
 const zip=path.join(root,'mobile-release/MFE_Viajes_RELEASE.zip');
 let code=cp.execFileSync('unzip',['-p',zip,file],{encoding:'utf8',maxBuffer:16*1024*1024});
-console.log('WORKER_BASE_LENGTH:',code.length);
 const read=name=>fs.readFileSync(path.join(root,'gc27-src',name),'utf8');
 const embedded=(name,content)=>'const '+name+' = '+JSON.stringify(content)+';';
 function swap(oldText,newText,label=oldText.slice(0,70)){
   if(!code.includes(oldText))throw new Error('No se encontró anclaje: '+label);
-  code=code.replace(oldText,()=>newText); // Evita que "
+  code=code.replace(oldText,()=>newText); // reemplazo por función: marcadores $ se respetan
 }
 function swapLine(prefix,replacement){
   const lines=code.split('\n'),at=lines.findIndex(x=>x.startsWith(prefix));
@@ -121,4 +120,3 @@ swap("return json({ok:true,result,lastError,message:lastError?",
 "return json({ok:true,result,lastError,lastUnavailable,message:lastError?");
 fs.writeFileSync(destination,code,'utf8');
 console.log('Worker GC27 parcheado:',code.length,'caracteres; Binter, reintentos SHA, Dunas y piscinas');
-const line=code.split('\n').find(x=>x.startsWith('const BINTER_STAGE2_RUN_FILE = '));console.log('BINTER_LINE_LENGTH:',line?.length,'END:',JSON.stringify(line?.slice(-120)));
