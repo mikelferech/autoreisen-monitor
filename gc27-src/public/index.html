@@ -7,12 +7,12 @@
   <meta name="description" content="Gestión privada y colaborativa de viajes MFE" />
   <meta name="application-name" content="GC 27" />
   <link rel="manifest" href="./manifest.webmanifest" />
-  <link rel="icon" href="./icons/gc27-logo.png?v=2.4.33" type="image/png" />
-  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png?v=2.4.33" />
+  <link rel="icon" href="./icons/gc27-logo.png?v=2.4.34" type="image/png" />
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png?v=2.4.34" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Livvic:ital,wght@0,400;0,500;0,600;0,700;0,800;0,900;1,400;1,600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="./styles.css?v=2.4.33-r1" />
+  <link rel="stylesheet" href="./styles.css?v=2.4.34-r1" />
   <title>GC 27</title>
 </head>
 <body>
@@ -68,7 +68,7 @@
     <nav id="main-nav" class="main-nav" aria-label="Secciones"></nav>
     <main id="main-content" class="main-content"></main>
     <footer class="app-footer">
-      <span id="footer-version">GC 27 · v2.4.33</span>
+      <span id="footer-version">GC 27 · v2.4.34</span>
     </footer>
   </div>
 
@@ -78,6 +78,6 @@
   <div id="toast-root" class="toast-root"></div>
 
   <script>(function(){const fallback={name:'GC 27',icon:'27',iconUrl:'./icons/gc27-logo.png'};try{let i=JSON.parse(localStorage.getItem('mfe-viajes-identity')||'{}');const storedName=String(i?.name||'').trim();const storedIcon=String(i?.icon||'').trim();const storedUrl=String(i?.iconUrl||'').trim();const normalizedIcon=storedIcon.replace(/[\uFE0E\uFE0F]/g,'').trim();const hasStored=Boolean(storedName||storedIcon||storedUrl);const legacyName=!storedName||/^mfe\s*viajes$/i.test(storedName);const legacyPlane=!normalizedIcon||/^(?:✈|🛫|🛬|🛩)$/.test(normalizedIcon);const legacyIconUrl=!storedUrl||/(?:^|\/)icons\/(?:app-icon|maskable-icon)\.svg(?:[?#].*)?$/i.test(storedUrl);const legacyDefault=legacyName||(legacyPlane&&legacyIconUrl);const previousYearDefault=storedName==='GC 26'&&storedUrl==='./icons/gc26-logo.png';if(!hasStored||legacyDefault||previousYearDefault){i=fallback;try{localStorage.setItem('mfe-viajes-identity',JSON.stringify(fallback));}catch{}}const name=String(i.name||fallback.name).trim()||fallback.name;const icon=String(i.icon||fallback.icon).trim()||fallback.icon;const iconUrl=String(i.iconUrl||'').trim();const logos=[document.querySelector('#boot-logo'),document.querySelector('#login-brand-icon')].filter(Boolean);const names=[document.querySelector('#boot-title'),document.querySelector('#login-app-name')].filter(Boolean);names.forEach(el=>el.textContent=name);logos.forEach(el=>{if(iconUrl){el.classList.add('has-custom-image');const img=document.createElement('img');img.src=iconUrl;img.alt='Logo de la aplicación';img.onerror=()=>{if(img.dataset.gc27Fallback!=='1'&&iconUrl!=='./icons/gc27-logo.png'){img.dataset.gc27Fallback='1';img.src='./icons/gc27-logo.png';return;}el.classList.remove('has-custom-image');el.textContent=icon||'27';};el.replaceChildren(img);}else{el.classList.remove('has-custom-image');el.textContent=icon;}});document.title=name;}catch{}document.querySelector('#toggle-password')?.addEventListener('click',()=>{const input=document.querySelector('#login-password');input.type=input.type==='password'?'text':'password';});})();</script>
-  <script type="module" src="./app.js?v=2.4.33-r1"></script>
+  <script type="module" src="./app.js?v=2.4.34-r1"></script>
 </body>
 </html>
