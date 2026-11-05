@@ -1,4 +1,4 @@
-const CACHE = "mfe-viajes-v2.4.33-r1";
+const CACHE = "mfe-viajes-v2.4.34-r1";
 const ICON_CACHE = "mfe-viajes-notification-icon-v1";
 const INSTALL_ICON_CACHE = "mfe-viajes-install-icon-v1";
 const INSTALL_MANIFEST_CACHE = "mfe-viajes-install-manifest-v1";
