@@ -2992,3 +2992,52 @@ body.design-premium .cover-layout-item.is-half .flight-ops-strip.is-compact .fli
 .flight-vueling-actions.has-five-passengers .vueling-quick-link{flex:1 1 104px;max-width:none}
 .flight-vueling-actions.has-five-passengers .wallet-pass-btn{flex:0 0 38px;min-width:38px;width:38px}
 @media(max-width:520px){.flight-vueling-actions.has-five-passengers .vueling-quick-link{flex:1 1 calc(50% - 3px)}.flight-vueling-actions.has-five-passengers .wallet-pass-btn{width:40px;min-width:40px;flex-basis:40px}}
+
+
+/* v2.4.34 · GC27: portada ancha en monitores Full HD y alojamientos de ambas islas. */
+@media (min-width:1250px){
+  body.design-premium[data-active-tab="cover"] .main-content{
+    width:calc(100% - 40px)!important;max-width:1880px!important;
+    padding-left:clamp(16px,2vw,36px)!important;padding-right:clamp(16px,2vw,36px)!important;
+  }
+  body.design-premium[data-active-tab="cover"] .cover-layout-grid{width:100%!important;max-width:none!important}
+  body.design-premium[data-active-tab="cover"] .stage-weather-grid,
+  body.design-premium[data-active-tab="cover"] .stage-lodging-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:20px}
+}
+.stage-weather-grid,.stage-lodging-grid{min-width:0}
+.stage-weather-grid>*{min-width:0}
+.stage-weather-grid .forecast-row{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));overflow-x:auto}
+.stage-weather-grid .forecast-day{min-width:0;padding-inline:2px}
+.stage-weather-grid .sun-times{display:flex;flex-wrap:wrap;gap:3px;justify-content:center}
+.stage-weather-grid .section-title-actions,.stage-weather-grid .section-title .row-actions{display:flex;gap:8px;align-items:center}
+.stage-weather-grid .stage-accuweather{flex:0 0 38px;min-width:38px}
+.stage-lodging-grid .lodging-card{display:flex!important;flex-direction:column;min-width:0;margin-top:18px}
+.stage-lodging-grid .lodging-card .lodging-info{width:100%}
+.stage-lodging-grid .lodging-card .lodging-image{min-height:190px!important;order:2}
+.stage-lodging-grid .lodging-card .lodging-map-section{order:3;min-width:0}
+.stage2-lodging-full{min-width:0;overflow:hidden}
+.stage2-lodging-full .flight-top{display:flex;justify-content:space-between;align-items:start;gap:10px}
+.stage2-lodging-full .lodging-date-actions{display:flex;flex-wrap:wrap;align-items:start;gap:12px}
+.stage2-lodging-full .lodging-date-actions .date-range{display:flex;flex-wrap:wrap;gap:10px}
+.stage2-lodging-full .lodging-quick-actions{display:flex;flex-wrap:wrap;gap:7px;min-width:0}
+.stage2-lodging-full .lodging-quick-actions>*{min-width:36px;max-width:100%}
+.stage2-lodging-full .lodging-image{background-size:cover;background-position:center}
+.stage2-lodging-photo-placeholder{display:grid;place-items:center;font-size:3rem;color:#dae3e9}
+.stage2-lodging-map iframe{width:100%;height:240px;min-height:240px;display:block;border:0}
+.stage2-lodging-price{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:12px;font-size:.85rem;color:var(--muted)}
+.stage2-lodging-files{padding:12px;display:flex;flex-wrap:wrap;gap:8px}
+.stage-lodging-detail>.stage2-lodging-full{margin:14px 0 16px}
+.stage-flight-actions{display:flex!important;align-items:center!important;justify-content:flex-end!important;gap:10px!important;flex-wrap:wrap!important}
+.stage-flight-actions .stage-flight-add-btn{display:inline-flex!important;align-items:center!important;justify-content:center!important;width:auto!important;min-height:38px!important;white-space:nowrap;font-size:.84rem!important;padding:7px 12px!important}
+.stage2-cover-monitors{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:10px 0 0}
+.stage2-cover-monitor{cursor:pointer;border:1px solid rgba(151,185,219,.22);background:rgba(18,37,59,.7);border-radius:12px;min-width:0;padding:10px 12px;display:flex;flex-direction:column;gap:6px}
+.stage2-cover-monitor:focus-visible,.stage2-cover-monitor:hover{outline:1px solid #609edc}
+.stage2-cover-monitor>span{display:flex;justify-content:space-between;gap:6px;min-width:0;flex-wrap:wrap}
+.stage2-cover-monitor strong{font-size:.85rem}
+@media(max-width:1250px){.stage-weather-grid .forecast-row{grid-template-columns:repeat(7,minmax(88px,1fr))}}
+@media(max-width:760px){
+  .stage-weather-grid,.stage-lodging-grid{grid-template-columns:1fr!important}
+  .stage2-cover-monitors{grid-template-columns:1fr}
+  .stage-flight-actions{justify-content:flex-start!important}
+  .stage-lodging-grid .lodging-card{margin-top:10px}
+}
