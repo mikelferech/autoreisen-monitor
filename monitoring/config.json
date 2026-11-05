@@ -16,12 +16,12 @@
     "preferredReturnFlight": "VY3271"
   },
   "autoreisen": {
-    "enabled": false,
+    "enabled": true,
     "searchUrl": "https://www.autoreisen.com/alquiler-coches/alquiler-de-coches.php",
     "pickup": "Gran Canaria - Aeropuerto",
     "dropoff": "Gran Canaria - Aeropuerto",
-    "pickupAt": "2027-06-06T08:30",
-    "dropoffAt": "2027-06-13T15:30",
+    "pickupAt": "2027-09-06T08:30",
+    "dropoffAt": "2027-09-13T15:30",
     "group": "D",
     "model": "Dacia Sandero Stepway Autom.",
     "reservedPrice": 0,
@@ -43,7 +43,7 @@
     "carId": "",
     "fleetTrackAll": true,
     "fleetTrackGroups": [
-      "E"
+      "D"
     ]
   },
   "cordial": {
@@ -57,7 +57,7 @@
     "targetBoard": "SOLO ALOJAMIENTO",
     "reservedPrice": 0,
     "searchUrl": "https://www.becordial.com/gran-canaria-sur/cordial-santa-agueda/",
-    "enabled": false,
+    "enabled": true,
     "scheduleMode": "daily",
     "scheduleTime": "06:35",
     "scheduleTimeZone": "Europe/Madrid",
@@ -107,7 +107,9 @@
     "searchUrl": "https://www.autoreisen.com/alquiler-coches/alquiler-de-coches.php",
     "enabled": true,
     "fleetTrackAll": true,
-    "fleetTrackGroups": [],
+    "fleetTrackGroups": [
+      "D"
+    ],
     "intervalHours": 24,
     "scheduleMode": "daily",
     "scheduleTime": "06:30",
@@ -128,10 +130,21 @@
     "checkIn": "2027-09-13",
     "checkOut": "2027-09-20",
     "adults": 5,
-    "rooms": 1,
-    "targetRoom": "Suites Apartments (5 adultos)",
+    "rooms": 3,
+    "targetRoom": "Cualquier habitación",
     "targetBoard": "Solo alojamiento",
     "reservedPrice": 0,
-    "searchUrl": "https://www.hoteldunasclub.es/reservar.html"
+    "searchUrl": "https://www.hoteldunasclub.es/reservar.html",
+    "searchNote": "Consulta comparativa para 5 adultos en 3 habitaciones (2+2+1). No modifica reserva existente."
+  },
+  "binterStage2": {
+    "enabled": true,
+    "date": "2027-09-13",
+    "origin": "LPA",
+    "destination": "FUE",
+    "adults": 5,
+    "resident": false,
+    "reservedPrice": 0,
+    "searchUrl": "https://www.bintercanarias.com/es/buscar-vuelos"
   }
 }
