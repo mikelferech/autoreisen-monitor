@@ -13,6 +13,16 @@ for(const [i,url] of urls.entries()){
     let elements=await page.locator('input,select,button,iframe,form,a[href*="reser"]').evaluateAll(nodes=>nodes.slice(0,90).map(n=>({tag:n.tagName,outer:n.outerHTML.slice(0,350)}))).catch(()=>[]);
     console.log('PAGE',i,JSON.stringify({url:page.url(),frames:page.frames().map(f=>f.url()).slice(0,25),elements,body:(await page.locator('body').innerText().catch(()=>'' )).slice(0,2200),network:network.slice(-75)},null,2));
     await page.screenshot({path:'artifacts/dunas-'+i+'.png',fullPage:true}).catch(()=>{});
+    try{
+      for(const id of ['boxDate','ocupsBox']){
+        await page.locator('#'+id).click({timeout:3500});
+        await page.waitForTimeout(900);
+        console.log('OPEN',id,JSON.stringify({content:(await page.locator('#dropDownContainer').innerText().catch(()=>'' )).slice(0,4500),html:(await page.locator('#dropDownContainer').innerHTML().catch(()=>'' )).slice(0,11000),forms:await page.locator('input,button,select').evaluateAll(nodes=>nodes.slice(-70).map(n=>n.outerHTML.slice(0,250))).catch(()=>[])},null,2));
+        await page.screenshot({path:'artifacts/dunas-'+id+'-'+i+'.png',fullPage:true}).catch(()=>{});
+        await page.locator('#'+id).click({timeout:2000}).catch(()=>{});
+      }
+    }catch(e){console.log('DROPDOWN ERROR',String(e.message||e));}
+
     await fs.writeFile('artifacts/dunas-'+i+'.html',await page.content(),'utf8').catch(()=>{});
     const reserve=page.getByRole('link',{name:/reservar|buscar disponibilidad/i}).first();
     if(await reserve.isVisible().catch(()=>false)){
