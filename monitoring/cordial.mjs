@@ -114,31 +114,13 @@ function normalizeCancellationLabels(rows=[]){
   });
 }
 function selectTargetOption(options=[],config={}){
-  const exact=options.find(row=>targetMatches(row,config));
+  // Nunca inferir una tarifa por similitud: la página puede contener precios
+  // de otras habitaciones, régimen o política de cancelación.
+  const exact=options.find(row=>targetMatches(row,config) && Number(row.price)>0);
   if(exact){exact.target=true;exact.targetMatch='exact';return exact;}
-  const room=normalize(config.targetRoom||'Classic Duplex');
-  const rate=normalize(config.targetRate||'Club Cordial - Reserva Online');
-  const board=normalize(config.targetBoard||'SOLO ALOJAMIENTO');
-  const candidates=[];
-  for(const row of options){
-    const rowRoom=normalize(row?.roomType),rowRate=normalize(row?.rateName),rowBoard=normalize(row?.board);
-    if(board&&!rowBoard.includes(board))continue;
-    let score=50;
-    const roomMatch=!room||rowRoom.includes(room)||rowRate.includes(room);
-    const rateMatch=!rate||rowRate.includes(rate)||rowRoom.includes(rate);
-    if(roomMatch)score+=100;
-    if(rateMatch)score+=80;
-    if(rate.includes('reserva online')&&(rowRate.includes('reserva online')||rowRoom.includes('reserva online')))score+=35;
-    if(positiveCancellation(row))score+=30;
-    if(/tarifa club cordial/.test(rowRate))score+=10;
-    if(score<150)continue;
-    candidates.push({row,score,price:Number(row?.price)||Number.POSITIVE_INFINITY});
-  }
-  candidates.sort((a,b)=>b.score-a.score||a.price-b.price);
-  const chosen=candidates[0]?.row||null;
-  if(chosen){chosen.target=true;chosen.targetMatch='inferred';}
-  return chosen;
+  return null;
 }
+
 async function optionDiagnostics(page,pattern){
   const rows=[];
   const candidates=page.locator('[role="option"],li,[data-id],[data-value],[data-code],[data-hotel-code],[data-destination-id]');
@@ -525,7 +507,12 @@ async function setAdults(page,config){
   const adults=Math.max(1,Number(config.adults)||2);
   const inputs=page.locator('input[name*="adult" i],select[name*="adult" i]');
   if(await inputs.count()){
-    const el=inputs.first();if((await el.evaluate(e=>e.tagName)).toLowerCase()==='select')await el.selectOption(String(adults)).catch(()=>{});else await el.fill(String(adults)).catch(()=>{});
+    const el=inputs.first();
+    if((await el.evaluate(e=>e.tagName)).toLowerCase()==='select')await el.selectOption(String(adults)).catch(()=>{});
+    else await forceControlValue(el,String(adults));
+    const actual=String(await el.inputValue().catch(()=>''));
+    if(actual!==String(adults))throw new Error(`Cordial: la web no aceptó ${adults} adultos (valor real ${actual||'vacío'}).`);
+    console.log(`[cordial] Ocupación aplicada y verificada en formulario: ${actual} adultos.`);
     return true;
   }
   // El formulario público de Cordial parte normalmente de 2 adultos. Si ya lo muestra, no tocamos el contador.
@@ -1028,7 +1015,9 @@ export async function monitorCordial(browser,config={}){
     if(!/\/booking\/process\/room/i.test(page.url())){
       const hotelOk=await chooseHotel(page,config).catch(()=>false);
       if(!hotelOk){const d=await diagnostic(page);throw new Error(`No se pudo inicializar por completo el destino/hotel de Cordial antes de buscar. ${d}`);}
-      const datesOk=await fillDateInputs(page,config).catch(()=>false);await setAdults(page,config).catch(()=>false);
+      const datesOk=await fillDateInputs(page,config).catch(()=>false);
+      const adultsOk=await setAdults(page,config);
+      if(!adultsOk)throw new Error(`Cordial: no se ha podido verificar la ocupación solicitada de ${config.adults||2} adultos antes de buscar.`);
       if(!datesOk){const d=await diagnostic(page);throw new Error(`No se localizaron de forma fiable los campos de fechas del formulario público de Cordial. ${d}`);}
       const submitted=await submitSearch(page);if(!submitted){const d=await diagnostic(page);throw new Error(`No se pudo enviar el formulario de reserva de Cordial. ${d}`);}
     }
@@ -1043,17 +1032,32 @@ export async function monitorCordial(browser,config={}){
     const body=await page.locator('body').innerText().catch(()=> '');
     if(/captcha|verify you are human|comprobando su navegador|access denied/i.test(body))throw new Error('Cordial ha mostrado una verificación anti-bot durante la consulta.');
     const headings=await page.locator('h1,h2,h3,h4,h5,h6').allTextContents().catch(()=>[]);
+    // Some versions of BeCordial silently reset dates/guests while navigating.
+    // Detect explicit mismatches in the result page rather than recording another stay.
+    const visibleDates=String(body.slice(0,3000));
+    const dateHits=[...visibleDates.matchAll(/(20\d{2})[-/](\d{1,2})[-/](\d{1,2})/g)].map(x=>`${x[1]}-${x[2].padStart(2,'0')}-${x[3].padStart(2,'0')}`);
+    const expected=[String(config.checkIn||''),String(config.checkOut||'')];
+    const wrongDates=dateHits.filter(x=>!expected.includes(x));
+    if(dateHits.length>=2&&!expected.every(x=>dateHits.includes(x))&&wrongDates.length>=2){
+      throw new Error(`Cordial: la página de resultados muestra fechas distintas (${dateHits.slice(0,4).join(', ')}) y no se guardará ese precio.`);
+    }
     const domParsed=await parseCordialDom(page,headings,config);
     const textOptions=parseCordialText(body,headings,config);
     const options=normalizeCancellationLabels(mergeCordialOptions(domParsed.rows,textOptions));
+    // Diagnóstico para divergencias entre lectores: no confirmar un objetivo
+    // cuando dos extractores asignan precios distintos al mismo tipo de tarifa.
+    const targetPrices=rows=>rows.filter(r=>targetMatches(r,config)).map(r=>Number(r.price)).filter(x=>Number.isFinite(x)&&x>0);
+    const domPrices=targetPrices(domParsed.rows), textPrices=targetPrices(textOptions);
+    const targetDisagreement=domPrices.length&&textPrices.length&&!domPrices.some(p=>textPrices.some(q=>Math.abs(p-q)<0.01));
+    if(targetDisagreement)console.warn(`[cordial] PRECIOS EN CONFLICTO: DOM=${domPrices.join(', ')} · TEXTO=${textPrices.join(', ')}. Objetivo no confirmado.`);
     const roomMeta=await extractRoomMeta(page);
     console.log(`[cordial] Parser combinado: DOM=${domParsed.rows.length} · texto=${textOptions.length} · final=${options.length} · fichas habitación=${Object.values(roomMeta||{}).filter(x=>x?.imageUrl||x?.detailUrl).length}.`);
     if(!options.length){await snapshot(page,'cordial-sin-opciones');const d=await diagnostic(page);throw new Error(`Cordial abrió el motor de reservas, pero no se pudieron interpretar tarifas. Se analizaron ${domParsed.contexts.length} botones Reservar. ${d}`);}
     for(const row of options)row.target=false;
-    const target=selectTargetOption(options,config);
+    const target=targetDisagreement?null:selectTargetOption(options,config);
     if(target)console.log(`[cordial] Objetivo ${target.targetMatch==='exact'?'exacto':'inferido'}: ${target.roomType} · ${target.rateName} · ${target.board} · ${Number(target.price).toFixed(2)} €`);
     await snapshot(page,'cordial-resultados');
-    return {ok:true,status:'ok',source:'BeCordial · navegador real · GitHub Actions + Playwright',checkedAt:isoNow(),hotel:config.hotel||'Cordial Santa Águeda & Perchel Beach Club',checkIn:config.checkIn,checkOut:config.checkOut,adults:Number(config.adults)||2,options,roomMeta,target,targetPrice:Number(target?.price)||0,availability:target?'Disponible':'No encontrado',resultUrl:page.url()};
+    return {ok:true,status:'ok',source:'BeCordial · navegador real · GitHub Actions + Playwright',checkedAt:isoNow(),hotel:config.hotel||'Cordial Santa Águeda & Perchel Beach Club',checkIn:config.checkIn,checkOut:config.checkOut,adults:Number(config.adults)||2,options,roomMeta,target,targetPrice:Number(target?.price)||0,availability:target?'Disponible':'Sin tarifa exacta confirmada',resultUrl:page.url()};
   }finally{await context.close();}
 }
 
