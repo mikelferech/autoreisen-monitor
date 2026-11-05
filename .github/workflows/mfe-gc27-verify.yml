@@ -1,0 +1,57 @@
+name: MFE GC27 · Verificar y preparar ZIP
+on:
+  push:
+    branches: [mfe-gc27-fixes-20261105]
+    paths:
+      - gc27-src/**
+      - monitoring/binter-stage2-run.mjs
+      - .github/workflows/mfe-gc27-verify.yml
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: mfe-gc27-verify
+  cancel-in-progress: true
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verificar sintaxis JS y JSON
+        run: |
+          node --check gc27-src/public/app.js
+          node --check gc27-src/CLOUDFLARE_WORKER_v2_2_54.js
+          node --check gc27-src/monitoring/dunas.mjs
+          node --check gc27-src/monitoring/binter-stage2-run.mjs
+          node --check gc27-src/monitoring/pools.mjs
+          node -e "JSON.parse(require('fs').readFileSync('gc27-src/monitoring/config.json'))"
+      - name: Tests de compatibilidad
+        run: |
+          for test in gc27-src/scripts/test-multistage.mjs gc27-src/scripts/test-stage-monitors.mjs; do
+            echo "Ejecutando $test"
+            node "$test"
+          done
+      - name: Construir ZIP actualizado
+        if: success()
+        run: |
+          mkdir -p mobile-release
+          (cd gc27-src && zip -q -r ../mobile-release/MFE_Viajes_RELEASE.zip .)
+          unzip -t mobile-release/MFE_Viajes_RELEASE.zip | tail -2
+          git config user.name "MFE GC27 updater"
+          git config user.email "mfe-gc27@users.noreply.github.com"
+          git add mobile-release/MFE_Viajes_RELEASE.zip
+          if ! git diff --cached --quiet; then
+            git commit -m "build: MFE GC27 ZIP with fixes"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: MFE-GC27-fixes
+          path: mobile-release/MFE_Viajes_RELEASE.zip
+          retention-days: 14
