@@ -1,4 +1,4 @@
-// MFE_DUNAS_MONITOR_VERSION: 1.0.0
+// MFE_DUNAS_MONITOR_VERSION: 1.0.1
 // Este lector solo acepta totales verificables para todas las habitaciones de la reserva.
 // Los precios diarios del calendario NO representan el coste del viaje de cinco personas.
 const DATE_RE=/^\d{4}-\d{2}-\d{2}$/;
@@ -18,9 +18,10 @@ const normalize=v=>String(v||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'')
 const roomMatches=(a,b)=>{const wanted=normalize(b||'');return !wanted||wanted.includes('cualquier')||wanted.includes('todas')||normalize(a).includes(wanted)||wanted.split(/\W+/).filter(x=>x.length>3).some(x=>normalize(a).includes(x));};
 function parseFinal(body,{adults=5,rooms=3}={}){
   const text=String(body||''),normalized=normalize(text);
-  const roomsSelected=new RegExp(`\\b${rooms}\\s*habitaciones?\\s+de\\s+${rooms}\\b`,'i').test(normalized);
-  if(!roomsSelected||/sin habitaci[oó]n seleccionada/i.test(text))return null;
-  if(!new RegExp(`${adults}\\s*adultos`,'i').test(normalized))return null;
+  const selectedCount=(normalized.match(/seleccionada/g)||[]).length;
+  const selectedText=new RegExp(`\\b${rooms}\\s*habitaci[oó]n(?:es)?\\s+de\\s+${rooms}\\b`,'i').test(normalized);
+  if((selectedCount<rooms&&!selectedText)||/sin habitaci[oó]n seleccionada/i.test(text))return null;
+  if(!new RegExp(`\\b${adults}\\s*adultos`,'i').test(normalized))return null;
   const priceStrings=[...text.matchAll(/Total\s*(?:Estancia|de\s*la\s*reserva|a\s*pagar|Reserva)\s*([\d.,]+)\s*€/gi)];
   const price=cash(priceStrings.at(-1)?.[1]);return price>0&&price<100000?price:null;
 }
@@ -58,7 +59,14 @@ export async function monitorDunas(browser,config){
       await selected.btn.click({timeout:7500});await page.waitForTimeout(1500);
       candidates.push({room:r+1,title:selected.heading,rate:selected.rate});
     }
-    if(candidates.length!==rooms)throw new Error(`Dunas Club: se pudieron seleccionar ${candidates.length} de ${rooms} habitaciones para ${adults} adultos en ${config.checkIn}–${config.checkOut}. No se registra precio parcial.`);
+    if(candidates.length!==rooms){
+      const responseText=await page.locator('body').innerText().catch(()=>body);
+      const noAvail=/no tenemos disponibilidad para la combinaci[oó]n|no hay disponibilidad|sin disponibilidad/i.test(responseText);
+      if(noAvail&&candidates.length===0){
+        return {ok:true,status:'unavailable',availability:'unavailable',price:null,total:null,source:'Hotel Dunas Club · Web oficial',rooms,adults,checkIn:config.checkIn,checkOut:config.checkOut,targetRoom:config.targetRoom||'',targetBoard:config.targetBoard||'',url,reason:`Sin disponibilidad confirmada para ${rooms} habitación(es) y ${adults} adultos en las fechas solicitadas.`};
+      }
+      throw new Error(`Dunas Club: se pudieron seleccionar ${candidates.length} de ${rooms} habitaciones para ${adults} adultos en ${config.checkIn}–${config.checkOut}. No se registra precio parcial.`);
+    }
     const finalText=await page.locator('body').innerText().catch(()=>body);
     const final= parseFinal(finalText,{adults,rooms});
     if(!final)throw new Error(`Dunas Club muestra tarifas o disponibilidad parcial, pero no un total confirmable para ${adults} adultos y ${rooms} habitaciones (${config.targetRoom||'Suite'}). Se conserva el precio anterior; consulta el enlace de reserva.`);
