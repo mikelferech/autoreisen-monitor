@@ -1,0 +1,32 @@
+name: MFE GC27 · Preparar fuentes para correcciones
+on:
+  push:
+    branches: [mfe-gc27-fixes-20261105]
+    paths:
+      - .github/workflows/mfe-gc27-extract.yml
+permissions:
+  contents: write
+jobs:
+  extract:
+    if: github.ref_name == 'mfe-gc27-fixes-20261105'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Extraer version vigente sin perder estructura
+        run: |
+          mkdir -p gc27-src
+          unzip -oq "mobile-release/MFE_Viajes_RELEASE.zip" -d gc27-src
+          find gc27-src -maxdepth 4 -type f | sort > gc27-manifest.txt
+          echo "Ficheros: $(wc -l < gc27-manifest.txt)"
+          head -80 gc27-manifest.txt
+      - name: Guardar fuentes en rama de trabajo
+        run: |
+          git config user.name "mfe-gc27-fix"
+          git config user.email "mfe-gc27-fix@users.noreply.github.com"
+          git add gc27-src gc27-manifest.txt
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: unpack GC27 v2.4.33 source for fixes"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
