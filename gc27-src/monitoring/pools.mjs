@@ -1,4 +1,4 @@
-// MFE_POOLS_AUTOMATION_VERSION: 1.0.4
+// MFE_POOLS_AUTOMATION_VERSION: 1.0.5
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
@@ -192,6 +192,68 @@ function mergePools(list=[]){
   }
   return [...map.values()].filter(p=>p.measurements.some(m=>(m.metrics||[]).length)).map(p=>{const measurements=repairRecirculationMeasurements(p.measurements);const latest=measurements.find(m=>/ultima|última|last/i.test(clean(m.measurement)))||measurements[0]||{};const temperature=latest.temperature??temperatureFromMetrics(latest.metrics||[]);return {...p,measurements,latest,temperature};});
 }
+
+async function readPublicPools(page){
+  const publicUrl='https://cordial.galileus.es/pools/public?token=NUEraFBKcnlEYzdUVVRobnRPMHc5Zz09';
+  const extraPage=await page.context().newPage();
+  const diagnostics={source:publicUrl,pools:0,options:0,network:0,warning:''};
+  try{
+    const network=await collectNetworkResponses(extraPage);
+    const response=await extraPage.goto(publicUrl,{waitUntil:'domcontentloaded',timeout:45000});
+    if(!response?.ok())throw new Error('La vista pública devolvió HTTP '+response?.status());
+    await extraPage.waitForTimeout(2200);
+    const text=await extraPage.locator('body').innerText().catch(()=>'');
+    const pools=[];
+    // Primera fuente: datos estructurados publicados en la propia página.
+    try{
+      const json=JSON.parse(String(await response.text()));
+      pools.push(...poolsFromNetwork([{body:JSON.stringify(json)}]));
+    }catch{}
+    const chosen=choosePoolSelect(await selectDescriptors(extraPage));
+    if(chosen){
+      diagnostics.options=chosen.options.length;
+      for(const opt of chosen.options.slice(0,45)){
+        const select=choosePoolSelect(await selectDescriptors(extraPage));if(!select)break;
+        try{
+          await extraPage.locator('select').nth(select.index).selectOption(opt.value?{value:opt.value}:{label:opt.text});
+          await extraPage.waitForTimeout(500);
+          const entry=await extractPool(extraPage,opt.text);
+          if(entry)pools.push(entry);
+        }catch{}
+      }
+    }else{
+      const options=await customOptions(extraPage);
+      diagnostics.options=options.length;
+      for(const opt of options.slice(0,35)){
+        try{
+          await extraPage.goto(publicUrl,{waitUntil:'domcontentloaded',timeout:45000});
+          await extraPage.waitForTimeout(400);
+          const trigger=extraPage.getByText(/^Select$/i).first();
+          if(await trigger.isVisible().catch(()=>false))await trigger.click({force:true});
+          const option=extraPage.getByText(opt.text,{exact:true}).last();
+          if(!await option.isVisible().catch(()=>false))continue;
+          await option.click({force:true});await extraPage.waitForTimeout(550);
+          const entry=await extractPool(extraPage,opt.text);
+          if(entry)pools.push(entry);
+        }catch{}
+      }
+      if(!pools.length){
+        const single=await extractPool(extraPage,'Piscina');
+        if(single)pools.push(single);
+      }
+    }
+    pools.push(...poolsFromNetwork(network));
+    diagnostics.network=network.length;
+    const result=mergePools(pools);
+    diagnostics.pools=result.length;
+    if(!result.length)diagnostics.warning='La vista pública está accesible pero no expuso otras piscinas interpretables.';
+    return {pools:result,diagnostics};
+  }catch(error){
+    diagnostics.warning=String(error?.message||error).slice(0,200);
+    return {pools:[],diagnostics};
+  }finally{await extraPage.close().catch(()=>{});}
+}
+
 async function scrapePools(page){
   const network=await collectNetworkResponses(page);
   await page.goto(SOURCE_URL,{waitUntil:'domcontentloaded',timeout:45000});
@@ -234,6 +296,9 @@ async function scrapePools(page){
   await page.waitForTimeout(250);diagnostics.networkResponses=network.length;
   pools.push(...poolsFromNetwork(network));
   pools=mergePools(pools);
+  const supplemental=await readPublicPools(page);
+  diagnostics.publicSource=supplemental.diagnostics;
+  if(supplemental.pools.length)pools=mergePools([...pools,...supplemental.pools]);
   diagnostics.detectedPools=pools.length;
   await fs.mkdir(ARTIFACTS,{recursive:true});
   await fs.writeFile(path.join(ARTIFACTS,'diagnostic.json'),JSON.stringify({diagnostics,network:network.map(x=>({url:x.url,status:x.status,contentType:x.contentType,preview:x.body.slice(0,1000)}))},null,2),'utf8').catch(()=>{});
