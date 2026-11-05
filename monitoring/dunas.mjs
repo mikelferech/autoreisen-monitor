@@ -1,4 +1,5 @@
-// MFE_DUNAS_MONITOR_VERSION: 1.2.0
+// MFE_DUNAS_MONITOR_VERSION: 1.3.0
+import fs from 'node:fs/promises';
 // Este lector solo acepta totales verificables para todas las habitaciones de la reserva.
 // Los precios diarios del calendario NO representan el coste del viaje de cinco personas.
 const DATE_RE=/^\d{4}-\d{2}-\d{2}$/;
@@ -40,11 +41,14 @@ export async function monitorDunas(browser,config){
     if(!/Dunas Club/i.test(body))throw new Error('El resultado no corresponde a Hotel Dunas Club.');
     const adults=Number(config.adults)||5,rooms=Number(config.rooms)||3;
     const candidates=[],requestedRoom=String(config.targetRoom||'Cualquier habitación');
+    const seenOffers=new Map();
+    await fs.mkdir('artifacts/dunas',{recursive:true}).catch(()=>{});
+    await page.screenshot({path:'artifacts/dunas/resultado-inicial.png',fullPage:true}).catch(()=>{});
     for(let r=0;r<rooms;r++){
       // El motor Keytel ha cambiado sus clases CSS varias veces. Los botones
       // accesibles son más estables que «li.c0806» o «.avail».
       // La reserva puede mostrar botones como enlaces/controles de otra etiqueta.
-      const buttons=page.getByRole('button',{name:/Elige habitaci[oó]n/i});
+      const buttons=page.locator('button, a, [role=button]').filter({hasText:/elige habitaci[oó]n|seleccionar habitaci[oó]n|seleccionar|elegir habitaci[oó]n/i});
       let count=Math.min(await buttons.count().catch(()=>0),100);
       if(!count){await page.waitForTimeout(3500);count=Math.min(await buttons.count().catch(()=>0),100);}
       const choices=[];
@@ -59,7 +63,9 @@ export async function monitorDunas(browser,config){
         const context=group||rate;
         const roomMatch=context.match(/(?:Suites? Apartments?|Apartamento[^\n]{0,65}|Studio[^\n]{0,65}|Habitaci[oó]n[^\n]{0,65})/i);
         heading=roomMatch?.[0]?.trim()||'';
-        if(!roomMatches(heading||context,requestedRoom))continue;
+        // El título puede estar en otro nodo del motor Keytel: no descartar
+        // toda la flota de habitaciones porque el botón carezca de título.
+        const matching=roomMatches(heading||context,requestedRoom);
         const text=normalize(rate),contextText=normalize(context);
         // Alojamiento, sin comida. Ignorar regímenes adicionales y tarifas
         // no reembolsables si existe una alternativa con cancelación gratuita.
@@ -71,7 +77,10 @@ export async function monitorDunas(browser,config){
         // desayuno/media pensión y provocaba excluir incorrectamente alojamiento.
         const categoryScore=/alojamiento y desayuno|media pension|pension completa/i.test(contextText)&&!extraBoard?-3:0;
         if(board.includes('alojamiento')&&extraBoard)continue;
-        const score=(free?100:0)+(nonRefundable?-100:0)+(extraBoard?-40:25)+(roomMatch?10:0)+categoryScore;
+        const score=(matching?1000:0)+(free?100:0)+(nonRefundable?-100:0)+(extraBoard?-40:25)+(roomMatch?10:0)+categoryScore;
+        const offered=rate.match(/(?:Total|Precio|Desde)?[^\n]{0,50}([0-9][0-9.,]{1,12})\s*€/i);
+        const offerName=heading||context.slice(0,90)||'Habitación';
+        if(offered){const key=normalize(offerName)+'|'+offered[1];seenOffers.set(key,{name:offerName,shownPrice:offered[1],verifiedTotal:false});}
         choices.push({btn,heading,rate:rate.slice(0,200),score});
       }
       choices.sort((a,b)=>b.score-a.score);
@@ -83,10 +92,14 @@ export async function monitorDunas(browser,config){
           chosen=true;break;
         }catch{}
       }
-      if(!chosen)break;
+      if(!chosen){
+        await page.screenshot({path:`artifacts/dunas/seleccion-${r+1}-fallida.png`,fullPage:true}).catch(()=>{});
+        break;
+      }
     }
     if(candidates.length!==rooms){
       const responseText=await page.locator('body').innerText().catch(()=>body);
+      await fs.writeFile('artifacts/dunas/diagnostico.json',JSON.stringify({url:page.url(),adults,rooms,selected:candidates,buttons:await page.locator('button, a, [role=button]').allInnerTexts().catch(()=>[]),text:String(responseText).slice(0,18000)},null,2)).catch(()=>{});
       const noAvail=/no tenemos disponibilidad para la combinaci[oó]n|no hay disponibilidad|sin disponibilidad|no se encontraron habitaciones/i.test(responseText);
       const noRates=(await page.getByRole('button',{name:/Elige habitaci[oó]n/i}).count().catch(()=>0))===0;
       if(candidates.length===0&&noAvail){
@@ -101,7 +114,7 @@ export async function monitorDunas(browser,config){
     const finalText=await page.locator('body').innerText().catch(()=>body);
     const final= parseFinal(finalText,{adults,rooms});
     if(!final)throw new Error(`Dunas Club muestra tarifas o disponibilidad parcial, pero no un total confirmable para ${adults} adultos y ${rooms} habitaciones (${config.targetRoom||'Suite'}). Se conserva el precio anterior; consulta el enlace de reserva.`);
-    return {ok:true,status:'ok',price:final,total:final,source:'Hotel Dunas Club · Keytel · precio completo verificado',rooms,adults,checkIn:config.checkIn,checkOut:config.checkOut,targetRoom:config.targetRoom||'',targetBoard:config.targetBoard||'',url,roomChoices:candidates};
+    return {ok:true,status:'ok',price:final,total:final,offers:[{name:requestedRoom,total:final,selected:true,verifiedTotal:true}],source:'Hotel Dunas Club · Keytel · precio completo verificado',rooms,adults,checkIn:config.checkIn,checkOut:config.checkOut,targetRoom:config.targetRoom||'',targetBoard:config.targetBoard||'',url,roomChoices:candidates};
   }finally{await ctx.close();}
 }
 
