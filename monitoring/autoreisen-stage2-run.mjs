@@ -1,4 +1,4 @@
-// MFE_AUTOREISEN_STAGE2_VERSION: 1.0.0
+// MFE_AUTOREISEN_STAGE2_VERSION: 1.1.0
 // Segunda isla: consulta aislada de AutoReisen. Nunca sobrescribe el monitor de la primera semana.
 import fs from 'node:fs/promises';
 import {chromium} from 'playwright';
@@ -27,10 +27,10 @@ try{
   }catch(error){console.warn('[autoreisen-stage2] Flota no disponible, probando precio de la reserva.',error.message);}
   if(!selected&&!config.model)throw new Error('No hay modelo configurado ni una flota con precios verificables para Fuerteventura.');
   let result=null;
-  if(selected&&Number(selected.total)>0){result={...scan,price:Number(selected.total),total:Number(selected.total),model:selected.model,group:selected.group,carId:selected.carId||'',availability:selected.availability||'Disponible'};}
+  if(selected&&Number(selected.total)>0){result={...scan,price:Number(selected.total),total:Number(selected.total),pricePerDay:Number(selected.pricePerDay)||0,model:selected.model,group:selected.group,carId:selected.carId||'',imageUrl:selected.imageUrl||'',availability:selected.availability||'Disponible'};}
   else result=await monitorAutoReisen(browser,config);
   if(!(Number(result?.total||result?.price)>0))throw new Error('AutoReisen no devolvió un precio numérico válido para la segunda isla.');
-  result={...result,ok:true,status:'ok',stageId:'week-2',queryIdentity:identity,searchConfig:{pickupAt:config.pickupAt,dropoffAt:config.dropoffAt,pickupOfficeId:config.pickupOfficeId,dropoffOfficeId:config.dropoffOfficeId,model:config.model,group:config.group},checkedAt:isoNow(),source:'AutoReisen · etapa 2 · GitHub Actions'};
+  result={...result,fleet:full.length?full:(Array.isArray(result.fleet)?result.fleet:[]),ok:true,status:'ok',stageId:'week-2',queryIdentity:identity,searchConfig:{pickupAt:config.pickupAt,dropoffAt:config.dropoffAt,pickupOfficeId:config.pickupOfficeId,dropoffOfficeId:config.dropoffOfficeId,model:config.model,group:config.group},checkedAt:isoNow(),source:'AutoReisen · etapa 2 · GitHub Actions'};
   await postResult('autoreisen-stage2',result);
   console.log('[autoreisen-stage2] OK',JSON.stringify({price:result.price,model:result.model,group:result.group,checkedAt:result.checkedAt}));
 }catch(error){
