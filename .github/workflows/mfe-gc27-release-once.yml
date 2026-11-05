@@ -1,0 +1,38 @@
+name: MFE GC27 · ZIP de correcciones
+on:
+  push:
+    branches: [mfe-gc27-fixes-20261105]
+    paths: [.github/workflows/mfe-gc27-release-once.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Regenerar Worker actualizado desde la fuente original
+        run: node gc27-src/scripts/patch-worker-gc27.cjs
+      - name: Verificar app y automatizaciones
+        run: |
+          node --check gc27-src/public/app.js
+          node --check gc27-src/CLOUDFLARE_WORKER_v2_2_54.js
+          node --check gc27-src/monitoring/binter-stage2-run.mjs
+          node --check gc27-src/monitoring/dunas.mjs
+          node --check gc27-src/monitoring/pools.mjs
+          node gc27-src/scripts/test-multistage.mjs
+          node gc27-src/scripts/test-stage-monitors.mjs
+      - name: Empaquetar actualización completa
+        run: |
+          mkdir -p artifact
+          (cd gc27-src && zip -q -r ../artifact/MFE_Viajes_GC27_v2_4_34_CORREGIDA.zip .)
+          unzip -t artifact/MFE_Viajes_GC27_v2_4_34_CORREGIDA.zip | tail -2
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MFE_Viajes_GC27_v2_4_34_CORREGIDA
+          path: artifact/MFE_Viajes_GC27_v2_4_34_CORREGIDA.zip
+          retention-days: 30
