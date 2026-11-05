@@ -1,0 +1,45 @@
+name: Binter · Gran Canaria a Fuerteventura · etapa 2
+on:
+  schedule:
+    - cron: '55 6 * * *'
+      timezone: 'Europe/Madrid'
+  workflow_dispatch:
+    inputs:
+      force:
+        type: boolean
+        default: true
+        required: false
+permissions:
+  contents: read
+concurrency:
+  group: binter-stage2
+  cancel-in-progress: false
+jobs:
+  monitor:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: monitoring
+    env:
+      MFE_WORKER_URL: ${{ secrets.MFE_WORKER_URL }}
+      MFE_MONITOR_SECRET: ${{ secrets.MFE_MONITOR_SECRET }}
+      MFE_FORCE_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.force || false }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: monitoring/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: node binter-stage2-run.mjs
+      - name: Diagnóstico si falla
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: binter-stage2-diagnostico
+          path: monitoring/artifacts/binter/
+          if-no-files-found: ignore
+          retention-days: 7
