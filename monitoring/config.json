@@ -107,9 +107,7 @@
     "searchUrl": "https://www.autoreisen.com/alquiler-coches/alquiler-de-coches.php",
     "enabled": true,
     "fleetTrackAll": true,
-    "fleetTrackGroups": [
-      "D"
-    ],
+    "fleetTrackGroups": [],
     "intervalHours": 24,
     "scheduleMode": "daily",
     "scheduleTime": "06:30",
