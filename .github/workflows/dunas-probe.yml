@@ -1,0 +1,32 @@
+name: MFE Dunas · Diagnóstico motor de reservas
+on:
+  push:
+    paths:
+      - "monitoring/dunas-probe.mjs"
+      - ".github/workflows/dunas-probe.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    defaults:
+      run:
+        working-directory: monitoring
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: monitoring/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: node dunas-probe.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dunas-probe
+          path: monitoring/artifacts/
+          retention-days: 3
