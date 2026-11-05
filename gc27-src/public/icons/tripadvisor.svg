@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-label="Tripadvisor">
+  <circle cx="15" cy="27" r="9" fill="#34E0A1"/><circle cx="33" cy="27" r="9" fill="#34E0A1"/>
+  <circle cx="15" cy="27" r="5" fill="#fff"/><circle cx="33" cy="27" r="5" fill="#fff"/>
+  <circle cx="15" cy="27" r="2.5" fill="#111"/><circle cx="33" cy="27" r="2.5" fill="#111"/>
+  <path d="M6 18c5-3 10-5 18-5s13 2 18 5M20 27h8" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>
+  <path d="m24 34-3 4h6z" fill="#FF5D5D"/>
+</svg>

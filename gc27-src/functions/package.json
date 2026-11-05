@@ -1,0 +1,17 @@
+{
+  "name": "mfe-viajes-functions",
+  "private": true,
+  "main": "index.js",
+  "engines": {"node": "22"},
+  "scripts": {
+    "serve": "firebase emulators:start --only functions",
+    "deploy": "firebase deploy --only functions",
+    "lint": "node --check index.js"
+  },
+  "dependencies": {
+    "@google-cloud/vision": "latest",
+    "cheerio": "latest",
+    "firebase-admin": "latest",
+    "firebase-functions": "latest"
+  }
+}

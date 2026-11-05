@@ -1,0 +1,16 @@
+{
+  "workers": [
+    {
+      "name": "mfe-viajes-precios",
+      "file": "CLOUDFLARE_WORKER_v2_2_54.js",
+      "url": "https://mfe-viajes-precios.mikelferech.workers.dev",
+      "expected": "2.2.54"
+    },
+    {
+      "name": "mfe-viajes-vueling",
+      "file": "CLOUDFLARE_WORKER_VUELING_v1_0_23.js",
+      "url": "https://mfe-viajes-vueling.mikelferech.workers.dev",
+      "expected": "1.0.23"
+    }
+  ]
+}

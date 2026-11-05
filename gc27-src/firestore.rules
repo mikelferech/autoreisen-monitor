@@ -1,0 +1,123 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return signedIn() && request.auth.token.email == 'mikelferech@gmail.com';
+    }
+
+    function isViewer() {
+      return signedIn() && request.auth.token.email == 'mluisaetxe@gmail.com';
+    }
+
+    function canReadSharedBudget() {
+      return isAdmin() || isViewer();
+    }
+
+    // Perfil central compartido por las aplicaciones MFE.
+    function travelProfileExists() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/mfeUsers/$(request.auth.uid));
+    }
+
+    function travelProfile() {
+      return get(/databases/$(database)/documents/mfeUsers/$(request.auth.uid)).data;
+    }
+
+    function hasTravelAccess() {
+      return signedIn()
+        && (
+          isAdmin()
+          || (
+            travelProfileExists()
+            && (
+              travelProfile().role == 'admin'
+              || (
+                travelProfile().apps is map
+                && travelProfile().apps.travel == true
+              )
+            )
+          )
+        );
+    }
+
+    function canEditTravel() {
+      return signedIn()
+        && (
+          isAdmin()
+          || (
+            travelProfileExists()
+            && hasTravelAccess()
+            && travelProfile().role in ['admin', 'editor']
+          )
+        );
+    }
+
+    match /publicConfig/cuentas-hogar-identity {
+      allow read: if true;
+
+      // Documento público y sin datos privados: solo identidad visual del login.
+      allow create, update: if signedIn()
+        && request.resource.data.keys().hasOnly([
+          'appName',
+          'appLogo',
+          'appFavicon',
+          'activeTabGradientStart',
+          'activeTabGradientEnd',
+          'updatedAt'
+        ])
+        && request.resource.data.appName is string
+        && request.resource.data.appName.size() <= 80
+        && request.resource.data.appLogo is string
+        && request.resource.data.appLogo.size() <= 900000
+        && request.resource.data.appFavicon is string
+        && request.resource.data.appFavicon.size() <= 900000
+        && request.resource.data.activeTabGradientStart is string
+        && request.resource.data.activeTabGradientStart.matches('^#[0-9A-Fa-f]{6}$')
+        && request.resource.data.activeTabGradientEnd is string
+        && request.resource.data.activeTabGradientEnd.matches('^#[0-9A-Fa-f]{6}$')
+        && request.resource.data.updatedAt is string
+        && request.resource.data.updatedAt.size() <= 40;
+
+      allow delete: if isAdmin();
+    }
+
+    match /presupuestos/hogar-principal {
+      allow read: if canReadSharedBudget();
+      allow create, update, delete: if isAdmin();
+
+      match /iconosMovimientos/{iconId} {
+        allow read: if canReadSharedBudget();
+        allow create, update, delete: if isAdmin();
+      }
+    }
+
+    match /presupuestos/{userId} {
+      allow read: if isAdmin() && userId == request.auth.uid;
+      allow create, update, delete: if false;
+    }
+
+    // Cada usuario autenticado puede leer su propio perfil.
+    // El administrador puede leer y mantener todos los perfiles.
+    match /mfeUsers/{userId} {
+      allow read: if signedIn() && (request.auth.uid == userId || isAdmin());
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Datos principales de MFE Viajes.
+    match /travelApps/{tripId}/sections/{sectionId} {
+      allow read: if hasTravelAccess();
+      allow create, update, delete: if canEditTravel();
+    }
+
+    // Cada usuario gestiona únicamente su propio token de notificaciones.
+    match /travelApps/{tripId}/pushDevices/{userId} {
+      allow read, create, update, delete: if hasTravelAccess()
+        && request.auth.uid == userId;
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "projects": {
+    "default": "presupuesto-hogar-9dead"
+  },
+  "targets": {
+    "presupuesto-hogar-9dead": {
+      "hosting": {
+        "viajes": [
+          "mfe-viajes-2026"
+        ]
+      }
+    }
+  }
+}

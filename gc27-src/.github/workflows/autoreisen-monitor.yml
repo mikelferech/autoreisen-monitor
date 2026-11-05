@@ -1,0 +1,77 @@
+name: AutoReisen · MFE Viajes
+
+on:
+  schedule:
+    # Una sola ejecución diaria a las 06:30 de Madrid. GitHub gestiona automáticamente CET/CEST.
+    - cron: '30 6 * * *'
+      timezone: "Europe/Madrid"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Forzar comprobación aunque todavía no toque'
+        required: false
+        default: true
+        type: boolean
+      telegram_test:
+        description: 'Enviar solo un mensaje de prueba por Telegram'
+        required: false
+        default: false
+        type: boolean
+      fleet_only:
+        description: 'Consultar únicamente la flota disponible para una búsqueda puntual'
+        required: false
+        default: false
+        type: boolean
+      request_id:
+        description: 'Identificador de la consulta puntual de flota'
+        required: false
+        default: ''
+        type: string
+      fleet_config_json:
+        description: 'Configuración temporal de la consulta puntual; no modifica la reserva del monitor diario'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: autoreisen-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: monitoring
+    env:
+      MFE_WORKER_URL: ${{ secrets.MFE_WORKER_URL }}
+      MFE_MONITOR_SECRET: ${{ secrets.MFE_MONITOR_SECRET }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || secrets.TELEGRAM_TOKEN || secrets.BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID || secrets.TELEGRAM_CHAT || secrets.CHAT_ID }}
+      MFE_FORCE_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.force || false }}
+      MFE_TEST_TELEGRAM: ${{ github.event_name == 'workflow_dispatch' && inputs.telegram_test || false }}
+      MFE_FLEET_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.fleet_only || false }}
+      MFE_REQUEST_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.request_id || '' }}
+      MFE_FLEET_CONFIG_JSON: ${{ github.event_name == 'workflow_dispatch' && inputs.fleet_config_json || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: monitoring/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: node monitor.mjs
+      - name: Guardar diagnóstico si falla
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autoreisen-diagnostico
+          path: monitoring/artifacts/
+          if-no-files-found: ignore
+          retention-days: 7

@@ -1,0 +1,74 @@
+{
+  "autoreisen": {
+    "pickup": "Gran Canaria - Aeropuerto",
+    "dropoff": "Gran Canaria - Aeropuerto",
+    "pickupAt": "2026-09-14T09:00",
+    "dropoffAt": "2026-09-21T15:00",
+    "group": "E",
+    "model": "Seat Arona o similar",
+    "reservedPrice": 137.03,
+    "searchUrl": "https://www.autoreisen.com/alquiler-coches/alquiler-de-coches.php",
+    "enabled": true,
+    "intervalHours": 24,
+    "telegramEnabled": true,
+    "telegramNotifyPriceDrop": true,
+    "telegramNotifyBelowReserved": true,
+    "telegramNotifyAvailability": true,
+    "telegramNotifyError": true,
+    "telegramNotifyRecovery": true,
+    "telegramMinDropAmount": 0,
+    "telegramMinDropPercent": 0,
+    "telegramNotifyEveryCheck": true,
+    "scheduleMode": "daily",
+    "scheduleTime": "06:30",
+    "scheduleTimeZone": "Europe/Madrid",
+    "pickupOfficeId": "18",
+    "dropoffOfficeId": "18",
+    "carId": "119",
+    "fleetTrackAll": true,
+    "fleetTrackGroups": []
+  },
+  "cordial": {
+    "hotel": "Cordial Santa Águeda & Perchel Beach Club",
+    "checkIn": "2026-09-14",
+    "checkOut": "2026-09-21",
+    "adults": 2,
+    "children": 0,
+    "targetRoom": "Classic Duplex",
+    "targetRate": "Club Cordial - Reserva Online",
+    "targetBoard": "SOLO ALOJAMIENTO",
+    "reservedPrice": 0,
+    "searchUrl": "https://www.becordial.com/gran-canaria-sur/cordial-santa-agueda/",
+    "enabled": true,
+    "scheduleMode": "daily",
+    "scheduleTime": "06:35",
+    "scheduleTimeZone": "Europe/Madrid"
+  },
+  "flightops": {
+    "enabled": true,
+    "flights": [
+      {
+        "id": "flight-out",
+        "number": "VY3272",
+        "date": "2026-09-14",
+        "departure": "2026-09-14T06:50:00+02:00",
+        "arrival": "2026-09-14T09:05:00+01:00",
+        "origin": "BIO",
+        "destination": "LPA",
+        "from": "Bilbao (BIO)",
+        "to": "Gran Canaria (LPA)"
+      },
+      {
+        "id": "flight-back",
+        "number": "VY3271",
+        "date": "2026-09-21",
+        "departure": "2026-09-21T16:40:00+01:00",
+        "arrival": "2026-09-21T20:45:00+02:00",
+        "origin": "LPA",
+        "destination": "BIO",
+        "from": "Gran Canaria (LPA)",
+        "to": "Bilbao (BIO)"
+      }
+    ]
+  }
+}

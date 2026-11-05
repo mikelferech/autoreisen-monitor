@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">MFE Viajes</title>
+  <desc id="desc">Icono oscuro con una ruta aérea y una letra V estilizada</desc>
+  <defs>
+    <linearGradient id="bg" x1="48" y1="28" x2="468" y2="488" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#19324a"/>
+      <stop offset="0.48" stop-color="#315d8a"/>
+      <stop offset="1" stop-color="#c7902f"/>
+    </linearGradient>
+    <linearGradient id="line" x1="132" y1="126" x2="390" y2="394" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#f6d47b"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#000" flood-opacity=".35"/>
+    </filter>
+  </defs>
+  <rect width="512" height="512" rx="116" fill="#101318"/>
+  <rect x="24" y="24" width="464" height="464" rx="98" fill="url(#bg)"/>
+  <path d="M116 137c54-35 118-47 180-31 57 15 105 55 128 108" fill="none" stroke="#fff" stroke-opacity=".26" stroke-width="9" stroke-linecap="round" stroke-dasharray="6 22"/>
+  <path d="M128 166 254 394 384 166" fill="none" stroke="url(#line)" stroke-width="36" stroke-linecap="round" stroke-linejoin="round" filter="url(#shadow)"/>
+  <path d="m306 133 85-37-37 85-14-34-34-14Z" fill="#fff" filter="url(#shadow)"/>
+  <circle cx="128" cy="166" r="17" fill="#f6d47b" stroke="#fff" stroke-width="7"/>
+  <circle cx="384" cy="166" r="17" fill="#f6d47b" stroke="#fff" stroke-width="7"/>
+  <path d="M205 422h102" stroke="#fff" stroke-opacity=".62" stroke-width="8" stroke-linecap="round"/>
+</svg>

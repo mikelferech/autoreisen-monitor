@@ -1,0 +1,17 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {quoteUrl,parseFinal} from '../monitoring/dunas.mjs';
+const url=quoteUrl({checkIn:'2027-06-13',checkOut:'2027-06-20',adults:5,rooms:3});
+assert.match(url,/start=2027-06-13/);assert.match(url,/end=2027-06-20/);
+assert.match(url,/guests%5B0%5D%5Badults%5D=2/);assert.match(url,/guests%5B1%5D%5Badults%5D=2/);assert.match(url,/guests%5B2%5D%5Badults%5D=1/);
+const valid='Hotel Dunas Club\nHabitaciones\n5Adultos - 3Hab\n3 Habitaciones de 3\nTotal Estancia\n2.354,60 €';
+assert.equal(parseFinal(valid,{adults:5,rooms:3}),2354.6);
+assert.equal(parseFinal('Hotel Dunas Club\n2 Habitaciones de 3\nTotal Estancia\n1.184,05 €\n5Adultos - 3Hab',{adults:5,rooms:3}),null);
+assert.equal(parseFinal('Total Habitación 640,80 €\nTotal Estancia 640,80 €',{adults:5,rooms:3}),null);
+assert.equal(parseFinal('5Adultos\n3 Habitaciones de 3\nSin habitación seleccionada\nTotal Estancia 2500,00 €',{adults:5,rooms:3}),null);
+const app=readFileSync(new URL('../public/app.js',import.meta.url),'utf8');
+assert.match(app,/STAGE_MONITOR_TYPES=\{car:'autoreisen-stage2',hotel:'dunas'\}/);
+assert.match(app,/github-stage-monitor-sync/);
+assert.match(app,/data-stage-monitor-refresh/);
+assert.match(app,/stageMonitorIdentity/);
+console.log('OK · GC 27 etapa 2: AutoReisen independiente y Dunas Club solo guarda total de todas las habitaciones.');

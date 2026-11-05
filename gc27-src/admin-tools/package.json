@@ -1,0 +1,7 @@
+{
+  "name": "mfe-viajes-admin-tools",
+  "private": true,
+  "type": "module",
+  "scripts": {"setup-users": "node setup-users.mjs users.json"},
+  "dependencies": {"firebase-admin": "latest"}
+}

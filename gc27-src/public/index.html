@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#111318" />
+  <meta name="description" content="Gestión privada y colaborativa de viajes MFE" />
+  <meta name="application-name" content="GC 27" />
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="icon" href="./icons/gc27-logo.png?v=2.4.33" type="image/png" />
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png?v=2.4.33" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Livvic:ital,wght@0,400;0,500;0,600;0,700;0,800;0,900;1,400;1,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="./styles.css?v=2.4.33-r1" />
+  <title>GC 27</title>
+</head>
+<body>
+  <div id="boot" class="boot-screen">
+    <div id="boot-logo" class="boot-logo has-custom-image"><img src="./icons/gc27-logo.png" alt="Logo de GC 27"></div>
+    <div id="boot-title" class="boot-title">GC 27</div>
+    <div class="boot-loader"></div>
+  </div>
+
+  <section id="login-view" class="login-view hidden">
+    <div class="login-card glass">
+      <div class="login-brand">
+        <div id="login-brand-icon" class="brand-icon has-custom-image"><img src="./icons/gc27-logo.png" alt="Logo de GC 27"></div>
+        <div>
+          <h1 id="login-app-name">GC 27</h1>
+          <p>Tu viaje, organizado de principio a fin.</p>
+        </div>
+      </div>
+      <form id="login-form" class="form-stack">
+        <label>Correo electrónico
+          <input id="login-email" type="email" autocomplete="username" required />
+        </label>
+        <label>Contraseña<div class="password-field"><input id="login-password" type="password" autocomplete="current-password" required /><button id="toggle-password" type="button" aria-label="Mostrar u ocultar contraseña">👁</button></div></label>
+        <button class="btn primary" type="submit">Entrar</button>
+      </form>
+      <button id="demo-login" class="btn ghost hidden" type="button">Entrar en modo demostración</button>
+      <p id="login-message" class="form-message"></p>
+    </div>
+  </section>
+
+  <div id="app-shell" class="app-shell hidden">
+    <header class="app-header">
+      <div class="header-brand">
+        <div id="header-icon" class="header-icon has-custom-image"><img src="./icons/gc27-logo.png" alt="Logo de GC 27"></div>
+        <div class="header-titles">
+          <span id="header-app-name" class="header-kicker">GC 27</span>
+          <h1><span id="header-destination">Destino</span> <span id="header-year">2026</span></h1>
+        </div>
+      </div>
+      <div class="header-actions">
+        <span id="save-state" class="save-state">Guardado</span>
+        <button id="edit-lock" class="icon-btn" aria-label="Bloquear o desbloquear edición" title="Desbloquear edición">🔒</button>
+        <button id="install-app" class="icon-btn hidden" aria-label="Instalar app" title="Instalar app">⬇️</button>
+        <div class="user-chip">
+          <span id="user-name">Usuario</span>
+          <small id="user-role">viewer</small>
+        </div>
+        <button id="logout-btn" class="icon-btn" aria-label="Cerrar sesión" title="Cerrar sesión">↪</button>
+      </div>
+    </header>
+    <div class="canary-header-line" aria-hidden="true"></div>
+
+    <nav id="main-nav" class="main-nav" aria-label="Secciones"></nav>
+    <main id="main-content" class="main-content"></main>
+    <footer class="app-footer">
+      <span id="footer-version">GC 27 · v2.4.33</span>
+    </footer>
+  </div>
+
+  <div id="modal-backdrop" class="modal-backdrop hidden" aria-hidden="true">
+    <div id="modal" class="modal" role="dialog" aria-modal="true"></div>
+  </div>
+  <div id="toast-root" class="toast-root"></div>
+
+  <script>(function(){const fallback={name:'GC 27',icon:'27',iconUrl:'./icons/gc27-logo.png'};try{let i=JSON.parse(localStorage.getItem('mfe-viajes-identity')||'{}');const storedName=String(i?.name||'').trim();const storedIcon=String(i?.icon||'').trim();const storedUrl=String(i?.iconUrl||'').trim();const normalizedIcon=storedIcon.replace(/[\uFE0E\uFE0F]/g,'').trim();const hasStored=Boolean(storedName||storedIcon||storedUrl);const legacyName=!storedName||/^mfe\s*viajes$/i.test(storedName);const legacyPlane=!normalizedIcon||/^(?:✈|🛫|🛬|🛩)$/.test(normalizedIcon);const legacyIconUrl=!storedUrl||/(?:^|\/)icons\/(?:app-icon|maskable-icon)\.svg(?:[?#].*)?$/i.test(storedUrl);const legacyDefault=legacyName||(legacyPlane&&legacyIconUrl);const previousYearDefault=storedName==='GC 26'&&storedUrl==='./icons/gc26-logo.png';if(!hasStored||legacyDefault||previousYearDefault){i=fallback;try{localStorage.setItem('mfe-viajes-identity',JSON.stringify(fallback));}catch{}}const name=String(i.name||fallback.name).trim()||fallback.name;const icon=String(i.icon||fallback.icon).trim()||fallback.icon;const iconUrl=String(i.iconUrl||'').trim();const logos=[document.querySelector('#boot-logo'),document.querySelector('#login-brand-icon')].filter(Boolean);const names=[document.querySelector('#boot-title'),document.querySelector('#login-app-name')].filter(Boolean);names.forEach(el=>el.textContent=name);logos.forEach(el=>{if(iconUrl){el.classList.add('has-custom-image');const img=document.createElement('img');img.src=iconUrl;img.alt='Logo de la aplicación';img.onerror=()=>{if(img.dataset.gc27Fallback!=='1'&&iconUrl!=='./icons/gc27-logo.png'){img.dataset.gc27Fallback='1';img.src='./icons/gc27-logo.png';return;}el.classList.remove('has-custom-image');el.textContent=icon||'27';};el.replaceChildren(img);}else{el.classList.remove('has-custom-image');el.textContent=icon;}});document.title=name;}catch{}document.querySelector('#toggle-password')?.addEventListener('click',()=>{const input=document.querySelector('#login-password');input.type=input.type==='password'?'text':'password';});})();</script>
+  <script type="module" src="./app.js?v=2.4.33-r1"></script>
+</body>
+</html>

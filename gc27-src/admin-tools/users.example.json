@@ -1,0 +1,15 @@
+[
+  {
+    "email": "usuario-existente@ejemplo.com",
+    "displayName": "Mikel",
+    "role": "admin",
+    "apps": {"travel": true, "hogar": true, "ahorro": true}
+  },
+  {
+    "email": "viajes@ejemplo.com",
+    "displayName": "Editor Viajes",
+    "password": "CAMBIAR-POR-UNA-CONTRASEÑA-SEGURA",
+    "role": "editor",
+    "apps": {"travel": true, "hogar": false, "ahorro": false}
+  }
+]
