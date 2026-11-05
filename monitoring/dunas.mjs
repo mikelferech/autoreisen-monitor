@@ -1,4 +1,4 @@
-// MFE_DUNAS_MONITOR_VERSION: 1.0.1
+// MFE_DUNAS_MONITOR_VERSION: 1.2.0
 // Este lector solo acepta totales verificables para todas las habitaciones de la reserva.
 // Los precios diarios del calendario NO representan el coste del viaje de cinco personas.
 const DATE_RE=/^\d{4}-\d{2}-\d{2}$/;
@@ -29,7 +29,11 @@ function parseFinal(body,{adults=5,rooms=3}={}){
 export async function monitorDunas(browser,config){
   const url=quoteUrl(config),ctx=await browser.newContext({locale:'es-ES',timezoneId:'Atlantic/Canary',viewport:{width:1440,height:1100}}),page=await ctx.newPage();
   try{
-    await page.goto(url,{waitUntil:'domcontentloaded',timeout:65000});await page.waitForTimeout(9000);
+    await page.goto(url,{waitUntil:'domcontentloaded',timeout:65000});
+    // Keytel tarda en hidratar la disponibilidad: no asumir que 9 s bastan.
+    await page.waitForTimeout(4500);
+    await page.getByRole('button',{name:/Elige habitaci[oó]n/i}).first().waitFor({state:'visible',timeout:18000}).catch(()=>{});
+    await page.waitForLoadState('networkidle',{timeout:5500}).catch(()=>{});
     const body=await page.locator('body').innerText({timeout:12000}),actualUrl=page.url();
     if(!actualUrl.includes('/disponibilidad.html'))throw new Error('Hotel Dunas Club no ha cargado la página de disponibilidad.');
     if(!actualUrl.includes(`start=${config.checkIn}`)||!actualUrl.includes(`end=${config.checkOut}`))throw new Error('Dunas Club ha cambiado el periodo de búsqueda. Se descarta la respuesta.');
@@ -37,35 +41,62 @@ export async function monitorDunas(browser,config){
     const adults=Number(config.adults)||5,rooms=Number(config.rooms)||3;
     const candidates=[],requestedRoom=String(config.targetRoom||'Cualquier habitación');
     for(let r=0;r<rooms;r++){
-      const available=page.locator('li.c0806:visible');
-      const count=await available.count();let selected=null;
+      // El motor Keytel ha cambiado sus clases CSS varias veces. Los botones
+      // accesibles son más estables que «li.c0806» o «.avail».
+      // La reserva puede mostrar botones como enlaces/controles de otra etiqueta.
+      const buttons=page.getByRole('button',{name:/Elige habitaci[oó]n/i});
+      let count=Math.min(await buttons.count().catch(()=>0),100);
+      if(!count){await page.waitForTimeout(3500);count=Math.min(await buttons.count().catch(()=>0),100);}
+      const choices=[];
       for(let i=0;i<count;i++){
-        const room=available.nth(i),heading=String((await room.locator('.avail').first().textContent().catch(()=>''))||'').trim();
-        if(!roomMatches(heading,requestedRoom))continue;
-        const rates=room.locator('li:visible');
-        const nr=await rates.count();
-        // Mantener una tarifa comparable en todos los intentos: solo alojamiento y cancelación gratuita.
-        for(let j=0;j<nr;j++){
-          const rate=rates.nth(j),text=normalize(await rate.innerText().catch(()=>''));
-          if(!text.includes('elige habitacion'))continue;
-          const board=normalize(config.targetBoard||'Solo alojamiento');
-          if(board.includes('alojamiento')&&!text.includes('cancelacion gratuita')&&text.includes('no reembolsable'))continue;
-          const btn=rate.getByRole('button',{name:/Elige habitación/i}).first();
-          if(await btn.isVisible().catch(()=>false)){selected={btn,heading,rate:text.slice(0,150)};break;}
-        }
-        if(selected)break;
+        const btn=buttons.nth(i);
+        if(!await btn.isVisible().catch(()=>false))continue;
+        let rate='',group='',heading='';
+        try{
+          rate=String(await btn.locator('xpath=ancestor::li[1]').innerText({timeout:1200})||'');
+          group=String(await btn.locator('xpath=ancestor::li[3]').innerText({timeout:1200})||'');
+        }catch{try{rate=String(await btn.locator('xpath=..').innerText({timeout:1200})||'');}catch{}}
+        const context=group||rate;
+        const roomMatch=context.match(/(?:Suites? Apartments?|Apartamento[^\n]{0,65}|Studio[^\n]{0,65}|Habitaci[oó]n[^\n]{0,65})/i);
+        heading=roomMatch?.[0]?.trim()||'';
+        if(!roomMatches(heading||context,requestedRoom))continue;
+        const text=normalize(rate),contextText=normalize(context);
+        // Alojamiento, sin comida. Ignorar regímenes adicionales y tarifas
+        // no reembolsables si existe una alternativa con cancelación gratuita.
+        const board=normalize(config.targetBoard||'Solo alojamiento');
+        const free=/cancelacion gratuita|cancelacion sin gastos|cancelaci[oó]n gratuita/i.test(text);
+        const nonRefundable=/no reembolsable|non refund/i.test(text);
+        const extraBoard=/alojamiento y desayuno|media pension|pension completa|desayuno incluido/i.test(text);
+        // No examinar todo el bloque de opciones: contiene asimismo tarifas de
+        // desayuno/media pensión y provocaba excluir incorrectamente alojamiento.
+        const categoryScore=/alojamiento y desayuno|media pension|pension completa/i.test(contextText)&&!extraBoard?-3:0;
+        if(board.includes('alojamiento')&&extraBoard)continue;
+        const score=(free?100:0)+(nonRefundable?-100:0)+(extraBoard?-40:25)+(roomMatch?10:0)+categoryScore;
+        choices.push({btn,heading,rate:rate.slice(0,200),score});
       }
-      if(!selected)break;
-      await selected.btn.click({timeout:7500});await page.waitForTimeout(1500);
-      candidates.push({room:r+1,title:selected.heading,rate:selected.rate});
+      choices.sort((a,b)=>b.score-a.score);
+      let chosen=false;
+      for(const candidate of choices){
+        try{
+          await candidate.btn.click({timeout:7000});await page.waitForTimeout(1000);
+          candidates.push({room:r+1,title:candidate.heading||'Habitación',rate:candidate.rate});
+          chosen=true;break;
+        }catch{}
+      }
+      if(!chosen)break;
     }
     if(candidates.length!==rooms){
       const responseText=await page.locator('body').innerText().catch(()=>body);
-      const noAvail=/no tenemos disponibilidad para la combinaci[oó]n|no hay disponibilidad|sin disponibilidad/i.test(responseText);
-      if(noAvail&&candidates.length===0){
-        return {ok:true,status:'unavailable',availability:'unavailable',price:null,total:null,source:'Hotel Dunas Club · Web oficial',rooms,adults,checkIn:config.checkIn,checkOut:config.checkOut,targetRoom:config.targetRoom||'',targetBoard:config.targetBoard||'',url,reason:`Sin disponibilidad confirmada para ${rooms} habitación(es) y ${adults} adultos en las fechas solicitadas.`};
+      const noAvail=/no tenemos disponibilidad para la combinaci[oó]n|no hay disponibilidad|sin disponibilidad|no se encontraron habitaciones/i.test(responseText);
+      const noRates=(await page.getByRole('button',{name:/Elige habitaci[oó]n/i}).count().catch(()=>0))===0;
+      if(candidates.length===0&&noAvail){
+        return {ok:true,status:'unavailable',availability:'unavailable',price:null,total:null,source:'Hotel Dunas Club · Web oficial',rooms,adults,checkIn:config.checkIn,checkOut:config.checkOut,targetRoom:config.targetRoom||'',targetBoard:config.targetBoard||'',url,reason:noAvail?'El motor de reservas indica que no hay combinación disponible para '+rooms+' habitaciones y '+adults+' adultos.':'El motor de reservas no mostró tarifas seleccionables para esta combinación; consulta de nuevo en la web oficial.'};
       }
-      throw new Error(`Dunas Club: se pudieron seleccionar ${candidates.length} de ${rooms} habitaciones para ${adults} adultos en ${config.checkIn}–${config.checkOut}. No se registra precio parcial.`);
+      if(candidates.length===0&&noRates){
+        const excerpt=String(responseText||'').replace(/\s+/g,' ').slice(0,320);
+        throw new Error('Dunas Club: Keytel no mostró botones de selección de habitaciones para la ocupación elegida. Comprueba el motor oficial. Diagnóstico: '+excerpt);
+      }
+      throw new Error(`Dunas Club: solo se pudieron seleccionar ${candidates.length} de ${rooms} habitaciones para ${adults} adultos en ${config.checkIn}–${config.checkOut}. No se registra precio parcial.`);
     }
     const finalText=await page.locator('body').innerText().catch(()=>body);
     const final= parseFinal(finalText,{adults,rooms});
