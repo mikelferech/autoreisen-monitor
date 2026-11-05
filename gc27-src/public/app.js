@@ -2616,7 +2616,7 @@ function editStageReservation(index,kind='hotel'){
     stage[kind]={...item,...v,adults:hotel?Math.max(1,Math.min(5,num(v.adults)||5)):item.adults,rooms:hotel?Math.max(1,Math.min(5,num(v.rooms)||1)):item.rooms,reservedPrice:Math.max(0,num(v.reservedPrice)),currentPrice:contextChanged?0:checkedPrice,lastUpdated:contextChanged?'':item.lastUpdated||'',lastError:contextChanged?'':item.lastError||'',monitorStatus:contextChanged?'pending':item.monitorStatus||'pending',priceHistory:contextChanged?[]:(changed?[...(item.priceHistory||[]),{t:new Date().toISOString(),price:checkedPrice,source:'manual'}].slice(-150):(item.priceHistory||[]))};
     const saved=await saveSection('stages');if(saved===false)throw new Error('No se ha guardado la etapa.');
     render();
-    if(stageMonitorConfigReady(kind,stage[kind])){try{await syncStageMonitor(kind);toast(`${binter?'Binter':hotel?'Dunas Club':'AutoReisen Fuerteventura'} · seguimiento diario sincronizado con GitHub.`);}catch(error){toast(`Reserva guardada. Seguimiento automático pendiente: ${error.message}`,'error');}}
+    if(stageMonitorConfigReady(kind,stage[kind])){try{await syncStageMonitor(kind);toast(`${binter?'Binter':binter?'Binter':hotel?'Dunas Club':'AutoReisen Fuerteventura'} · seguimiento diario sincronizado con GitHub.`);}catch(error){toast(`Reserva guardada. Seguimiento automático pendiente: ${error.message}`,'error');}}
 
   }});
 }
@@ -8648,6 +8648,16 @@ async function applyStageMonitorResult(kind,{silent=false}={}){
   const stage=tripStages()[1];if(!stage)return;const item=kind==='binter'?(stage.binter||(stage.binter=stageBinterItem())):stage[kind];if(!item)return;
   let response=null;try{response=await callPriceWorker({action:STAGE_MONITOR_TYPES[kind]},{timeoutMs:12500});}catch(error){if(!silent)throw error;return;}
   const result=response?.result||{};
+  const unavailable=response?.lastUnavailable;
+  if(unavailable?.queryIdentity===stageMonitorIdentity(kind,item)&&String(unavailable.checkedAt||'')>String(item.lastAttempt||'')){
+    item.lastAttempt=unavailable.checkedAt;
+    item.monitorStatus='unavailable';
+    item.lastError='';
+    item.unavailableReason=unavailable.reason||'No hay disponibilidad para la ocupación y fechas indicadas.';
+    await saveSection('stages');
+    if(!silent)render();
+    return;
+  }
   if((!result?.checkedAt||result.queryIdentity!==stageMonitorIdentity(kind,item))&&response?.lastError?.queryIdentity===stageMonitorIdentity(kind,item)){
     const e=response.lastError;if(String(item.lastAttempt||'')!==String(e.checkedAt)){
       item.lastAttempt=e.checkedAt;item.lastError=e.error||'La última comprobación no consiguió un precio verificable.';item.monitorStatus='error';await saveSection('stages');
@@ -8711,7 +8721,7 @@ function renderStage2TrackerCards(kind='hotel'){
   const card=kind=>{
     const item=kind==='binter'?stageBinterItem():(stage[kind]||{}),hotel=kind==='hotel',binter=kind==='binter',title=binter?'Binter · vuelo entre islas':hotel?'Hotel Dunas Club · semana 2':'AutoReisen · semana 2';
     const reserved=num(item.reservedPrice),current=num(item.currentPrice),history=item.priceHistory||[];
-    const ready=stageMonitorConfigReady(kind,item),status=item.lastError?`Último intento: ${item.lastError}`:item.lastUpdated?`Último precio confirmado: ${formatDate(item.lastUpdated,{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}`:ready?'Sin precio automático confirmado para estas fechas y ocupación.':'Configura primero las fechas.';
+    const ready=stageMonitorConfigReady(kind,item),status=item.monitorStatus==='unavailable'?(item.unavailableReason||'Sin disponibilidad confirmada para estas fechas.'):item.lastError?`Último intento: ${item.lastError}`:item.lastUpdated?`Último precio confirmado: ${formatDate(item.lastUpdated,{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}`:ready?'Sin precio automático confirmado para estas fechas y ocupación.':'Configura primero las fechas.';
     const url=binter?'https://www.bintercanarias.com/es/buscar-vuelos':hotel?(item.website||'https://www.hoteldunasclub.es/reservar.html'):(item.url||'https://www.autoreisen.com/');
     const note=binter?`LPA → FUE · ${num(item.adults)||5} adultos · ${item.resident===true?'Residentes':'No residentes'}`:hotel?`Ocupación: ${num(item.adults)||5} adultos · ${num(item.rooms)||1} habitación(es) · ${esc(item.targetRoom||'Cualquier habitación')}`:[item.pickup||'Fuerteventura',item.model||item.group||'Vehículo pendiente'].join(' · ');
     return `<section class="card stage-track-card" data-tracker-card="stage-${kind}" data-sort-item="tracker|stage-${kind}"><div class="section-title" style="--g1:${hotel?'#314a63':'#275032'};--g2:${hotel?'#4e6c88':'#407b52'}"><span>${binter?'✈️':hotel?'🏨':'🚗'} ${esc(title)} · ${esc(stage.island||'Segunda isla')}</span><div class="row-actions">${canEdit()?`${sortDragHandle(`tracker|stage-${kind}`,'Reordenar seguimiento')}<button class="mini-btn" data-stage-monitor-refresh="${kind}" title="Consultar precio ahora" ${ready?'':'disabled'}>↻</button><button class="mini-btn" ${binter?'data-stage-edit-binter':'data-stage-edit-reservation="1:'+kind+'"'} title="Configurar seguimiento">✎</button>`:''}</div></div><div class="card-body"><strong>${esc(binter?'Binter · Gran Canaria a Fuerteventura':hotel?item.name||'Hotel Dunas Club':item.provider||'AutoReisen')}</strong><p class="muted">${esc(note)} · ${esc(binter?(item.date||'Fecha pendiente'):hotel?`${item.checkIn||'—'} al ${item.checkOut||'—'}`:`${item.pickupAt||'—'} → ${item.dropoffAt||'—'}`)}</p><div class="stage-monitor-values"><div><small>Reservado</small><b>${reserved?formatMoney(reserved):'—'}</b></div><div><small>Última consulta</small><b>${current?formatMoney(current):'—'}</b></div><div><small>Variación</small><b>${current&&reserved?formatMoney(current-reserved):'—'}</b></div></div><p class="muted">${esc(status)} · ${history.length} consultas guardadas. ${binter?'Solo se registra el total completo de los pasajeros, no tarifas individuales.':hotel?'El monitor solo registra importes finales verificables para habitación, fechas y personas.':'Los importes corresponden solo al alquiler en Fuerteventura.'}</p><div class="page-actions">${safeLink(url,'Web oficial','🌐')}</div>${history.length?`<div class="stage-monitor-history">${history.slice(-5).reverse().map(h=>`<span>${formatDate(h.t)} · ${formatMoney(h.price)}</span>`).join('')}</div>`:''}${history.length>1?trackerSingleHistoryChart(history.map(x=>({date:x.t,price:x.price})),hotel?'Dunas Club':'AutoReisen Fuerteventura'):''}</div></section>`;
