@@ -23,7 +23,7 @@ jobs:
           cache-dependency-path: monitoring/package-lock.json
       - run: npm ci
       - run: npx playwright install --with-deps chromium
-      - run: node dunas-probe.mjs
+      - run: node dunas-search-probe.mjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
