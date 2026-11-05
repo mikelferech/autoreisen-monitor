@@ -10,6 +10,8 @@ for(const [i,url] of urls.entries()){
     page.on('response',r=>{const u=r.url(); if(/booking|keytel|hotel|availab|reserve|reserva/i.test(u) && network.length<100) network.push({status:r.status(),url:u.slice(0,350)});});
     await page.goto(url,{waitUntil:'domcontentloaded',timeout:50000});
     await page.waitForTimeout(5000);
+    await page.locator('button.fn-disableAll.fn-confirm').first().click({timeout:3500}).catch(()=>{});
+    await page.waitForTimeout(900);
     let elements=await page.locator('input,select,button,iframe,form,a[href*="reser"]').evaluateAll(nodes=>nodes.slice(0,90).map(n=>({tag:n.tagName,outer:n.outerHTML.slice(0,350)}))).catch(()=>[]);
     console.log('PAGE',i,JSON.stringify({url:page.url(),frames:page.frames().map(f=>f.url()).slice(0,25),elements,body:(await page.locator('body').innerText().catch(()=>'' )).slice(0,2200),network:network.slice(-75)},null,2));
     await page.screenshot({path:'artifacts/dunas-'+i+'.png',fullPage:true}).catch(()=>{});
