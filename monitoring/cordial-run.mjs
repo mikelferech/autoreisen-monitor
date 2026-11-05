@@ -43,7 +43,9 @@ async function launchInstalledChrome(){
 
 const browser=await launchInstalledChrome();
 try{
-  const result=await monitorCordial(browser,config);
+  // Limit prolonged booking-page stalls. On timeout, report an explicit error rather than leaving the UI pending indefinitely.
+  let guard;
+  const result=await Promise.race([monitorCordial(browser,config),new Promise((_,reject)=>{guard=setTimeout(()=>reject(new Error('Cordial: consulta agotada tras 120 segundos. Revisa el diagnóstico de la página y vuelve a comprobar.')),120000);})]).finally(()=>clearTimeout(guard));
   await postResult('cordial',{...result,checkedAt:result.checkedAt||isoNow()});
   console.log('[cordial] OK',JSON.stringify(result,null,2));
 }catch(error){
