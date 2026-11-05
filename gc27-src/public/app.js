@@ -2614,7 +2614,7 @@ function editStageReservation(index,kind='hotel'){
     stage[kind]={...item,...v,adults:hotel?Math.max(1,Math.min(5,num(v.adults)||5)):item.adults,rooms:hotel?Math.max(1,Math.min(5,num(v.rooms)||3)):item.rooms,reservedPrice:Math.max(0,num(v.reservedPrice)),currentPrice:contextChanged?0:checkedPrice,lastUpdated:contextChanged?'':item.lastUpdated||'',lastError:contextChanged?'':item.lastError||'',monitorStatus:contextChanged?'pending':item.monitorStatus||'pending',priceHistory:contextChanged?[]:(changed?[...(item.priceHistory||[]),{t:new Date().toISOString(),price:checkedPrice,source:'manual'}].slice(-150):(item.priceHistory||[]))};
     const saved=await saveSection('stages');if(saved===false)throw new Error('No se ha guardado la etapa.');
     render();
-    if(stageMonitorConfigReady(kind,stage[kind])){try{await syncStageMonitor(kind);toast(`${hotel?'Dunas Club':'AutoReisen Fuerteventura'} · seguimiento diario sincronizado con GitHub.`);}catch(error){toast(`Reserva guardada. Seguimiento automático pendiente: ${error.message}`,'error');}}
+    if(stageMonitorConfigReady(kind,stage[kind])){try{await syncStageMonitor(kind);toast(`${binter?'Binter':hotel?'Dunas Club':'AutoReisen Fuerteventura'} · seguimiento diario sincronizado con GitHub.`);}catch(error){toast(`Reserva guardada. Seguimiento automático pendiente: ${error.message}`,'error');}}
 
   }});
 }
@@ -2655,7 +2655,8 @@ function bindStageControls(){
   $$('[data-stage-add-interisland]').forEach(b=>b.onclick=()=>editInterislandFlight());
   $$('[data-stage-add-flight]').forEach(b=>b.onclick=()=>editFlight());
   $$('[data-stage-edit-flight]').forEach(b=>b.onclick=()=>editFlight(num(b.dataset.stageEditFlight)));
-  $$('[data-stage-add-purchase]').forEach(b=>b.onclick=()=>editPurchase(null,b.dataset.stageAddPurchase));
+  $('[data-stage-add-purchase]').forEach(b=>b.onclick=()=>editPurchase(null,b.dataset.stageAddPurchase));
+  $('[data-stage-edit-binter]').forEach(b=>b.onclick=()=>editStageBinter());
 }
 binders.stages=()=>{bindStageControls();if(multiStageEnabled()&&(!state.stageMonitorFetchedAt||Date.now()-state.stageMonitorFetchedAt>120000)){state.stageMonitorFetchedAt=Date.now();void refreshStageMonitorResults();}};
 
@@ -6641,7 +6642,7 @@ async function applySortDrop(sourceKey,targetKey,after=false,isContainer=false){
     const detected=orderedPoolList(state.poolMeasurements?.pools||[]).map(p=>poolConfigKey(p.name)),order=[...new Set([...(state.data.settings.poolPanel?.poolOrder||[]),...detected])],from=order.indexOf(s[1]),to=order.indexOf(t[1]);if(from<0||to<0||!moveArrayItemTo(order,from,to,after))return false;state.data.settings.poolPanel.poolOrder=order;await saveSection('settings');render();return true;
   }
   if(kind==='tracker'){
-    const order=state.data.trackers.order||[],from=order.indexOf(s[1]),to=order.indexOf(t[1]);if(from<0||to<0||!moveArrayItemTo(order,from,to,after))return false;await saveSection('trackers');render();return true;
+    const order=[...new Set([...(state.data.trackers.order||[]),'autoreisen','cordial','vueling','fuel','stage-hotel','stage-car','stage-binter'])],from=order.indexOf(s[1]),to=order.indexOf(t[1]);if(from<0||to<0||!moveArrayItemTo(order,from,to,after))return false;state.data.trackers.order=order;await saveSection('trackers');render();return true;
   }
   if(kind==='tab'){
     const order=state.data.settings.tabOrder||[],from=order.indexOf(s[1]),to=order.indexOf(t[1]);if(from<0||to<0||!moveArrayItemTo(order,from,to,after))return false;await saveSection('settings');render();return true;
@@ -8550,16 +8551,26 @@ async function refreshMonitorFallbackStatus({force=false,rerender=false}={}){
 }
 
 // v2.4.33 · Monitores autónomos para AutoReisen Fuerteventura y Hotel Dunas Club.
-const STAGE_MONITOR_TYPES={car:'autoreisen-stage2',hotel:'dunas'};
+const STAGE_MONITOR_TYPES={car:'autoreisen-stage2',hotel:'dunas',binter:'binter-stage2'};
+function stageBinterItem(){
+  const stage=tripStages()[1]||{},saved=stage.binter||{},flight=(state.data.cover?.flights||[]).find(f=>/binter/i.test(f.airline||'')||/^NT\\s*\\d/i.test(f.number||''));
+  return {date:flight?.date||stage.start||'',origin:'LPA',destination:'FUE',adults:Math.max(1,num(state.data.settings?.people)||5),resident:false,...saved};
+}
 function stageMonitorIdentity(kind,item={}){
+  if(kind==='binter')return [item.date||'',item.origin||'LPA',item.destination||'FUE',Number(item.adults)||5,item.resident===true?'resident':'no-resident'].join('|');
   return kind==='car'?[item.pickupAt,item.dropoffAt,item.pickupOfficeId||'19',item.dropoffOfficeId||'19',item.model||'',item.group||''].map(x=>String(x||'').trim()).join('|'):
     [item.checkIn,item.checkOut,String(item.adults||5),String(item.rooms||3),String(item.targetRoom||'Cualquier habitación')].map(x=>String(x||'').trim()).join('|');
 }
 function stageMonitorConfigReady(kind,item={}){
+  if(kind==='binter')return /^\\d{4}-\\d{2}-\\d{2}$/.test(String(item.date||''));
   return kind==='car'?/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(String(item.pickupAt||''))&&/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(String(item.dropoffAt||'')):
     /^\d{4}-\d{2}-\d{2}$/.test(String(item.checkIn||''))&&/^\d{4}-\d{2}-\d{2}$/.test(String(item.checkOut||''));
 }
 function stageMonitorConfig(kind){
+  if(kind==='binter'){
+    const item=stageBinterItem();
+    return {enabled:true,origin:'LPA',destination:'FUE',date:item.date,adults:Math.max(1,Math.min(9,num(item.adults)||5)),resident:item.resident===true,reservedPrice:num(item.reservedPrice),searchUrl:'https://www.bintercanarias.com/es/buscar-vuelos'};
+  }
   const item=tripStages()[1]?.[kind]||{};
   if(kind==='car')return {
     pickup:item.pickup||'Fuerteventura (FUE)',dropoff:item.dropoff||item.pickup||'Fuerteventura (FUE)',
@@ -8574,11 +8585,11 @@ function stageMonitorConfig(kind){
 }
 async function syncStageMonitor(kind){
   if(!STAGE_MONITOR_TYPES[kind])throw new Error('Seguimiento desconocido.');
-  const item=tripStages()[1]?.[kind];if(!item||!stageMonitorConfigReady(kind,item))throw new Error('Configura primero las fechas de la segunda semana.');
+  const item=kind==='binter'?stageBinterItem():tripStages()[1]?.[kind];if(!item||!stageMonitorConfigReady(kind,item))throw new Error('Configura primero las fechas de la segunda semana.');
   return callIntegrationWorker({action:'github-stage-monitor-sync',kind,config:stageMonitorConfig(kind)});
 }
 async function applyStageMonitorResult(kind,{silent=false}={}){
-  const item=tripStages()[1]?.[kind];if(!item)return;
+  const stage=tripStages()[1];if(!stage)return;const item=kind==='binter'?(stage.binter||(stage.binter=stageBinterItem())):stage[kind];if(!item)return;
   let response=null;try{response=await callPriceWorker({action:STAGE_MONITOR_TYPES[kind]},{timeoutMs:12500});}catch(error){if(!silent)throw error;return;}
   const result=response?.result||{};
   if((!result?.checkedAt||result.queryIdentity!==stageMonitorIdentity(kind,item))&&response?.lastError?.queryIdentity===stageMonitorIdentity(kind,item)){
@@ -8592,7 +8603,7 @@ async function applyStageMonitorResult(kind,{silent=false}={}){
   if(lastAttempt&&lastAttempt>String(result.checkedAt)&&response.lastError?.queryIdentity===result.queryIdentity){item.lastError=response.lastError.error||'La última consulta ha fallado.';item.lastAttempt=lastAttempt;item.monitorStatus='error';}
   else{item.lastError='';item.lastAttempt=result.checkedAt;item.monitorStatus='ok';}
   const price=num(result.total||result.price);
-  if(price<=0)return;
+  if(price<=0){if(result.status==='unavailable'||result.availability==='unavailable'){item.monitorStatus='unavailable';item.lastError='';item.lastAttempt=result.checkedAt;await saveSection('stages');}return;}
   const isNew=String(item.lastUpdated||'')!==String(result.checkedAt);
   item.currentPrice=price;item.lastUpdated=result.checkedAt;item.source=result.source||'';
   if(kind==='car'){item.availability=result.availability||'',item.matchedModel=result.model||'',item.fleetPrices=result.fleet||[];}
@@ -8600,9 +8611,9 @@ async function applyStageMonitorResult(kind,{silent=false}={}){
   if(!silent)render();
 }
 async function runStageMonitorNow(kind){
-  const stage=tripStages()[1],item=stage?.[kind];if(!item||!stageMonitorConfigReady(kind,item))throw new Error('Primero configura las fechas de recogida y devolución o de entrada y salida.');
+  const stage=tripStages()[1];if(!stage)throw new Error('No hay segunda etapa.');const item=kind==='binter'?(stage.binter||(stage.binter=stageBinterItem())):stage[kind];if(!item||!stageMonitorConfigReady(kind,item))throw new Error('Primero configura las fechas del seguimiento.');
   if(!canEdit())throw new Error('Desbloquea la edición para lanzar este monitor.');
-  toast(`Iniciando ${kind==='car'?'AutoReisen Fuerteventura':'Hotel Dunas Club'}…`);
+  toast(`Iniciando ${kind==='car'?'AutoReisen Fuerteventura':kind==='binter'?'Binter LPA → FUE':'Hotel Dunas Club'}…`);
   await syncStageMonitor(kind);
   const start=Date.now();const run=await callIntegrationWorker({action:'github-stage-monitor-run',kind});
   if(!run?.workflowTriggered)throw new Error('No se pudo iniciar el monitor en GitHub.');
@@ -8613,29 +8624,51 @@ async function runStageMonitorNow(kind){
 }
 async function refreshStageMonitorResults(){
   if(!multiStageEnabled())return;
-  await Promise.allSettled(['car','hotel'].map(kind=>applyStageMonitorResult(kind,{silent:true})));
+  await Promise.allSettled(['car','hotel','binter'].map(kind=>applyStageMonitorResult(kind,{silent:true})));
   if(state.activeTab==='trackers'||state.activeTab==='stages')render();
 }
-function renderStage2TrackerCards(){
+
+function editStageBinter(){
+  const stage=tripStages()[1];if(!stage)return;
+  const current=stageBinterItem();
+  openForm({title:'Binter · seguimiento etapa 2',fields:[
+    {name:'date',label:'Fecha del vuelo entre islas',type:'date',required:true},
+    {name:'adults',label:'Pasajeros adultos',type:'number',min:1,max:9},
+    {name:'residentSelection',label:'Tarifa de residencia',type:'select',options:[{value:'no',label:'No residentes'},{value:'yes',label:'Residentes canarios'}]},
+    {name:'reservedPrice',label:'Precio total reservado (€)',type:'number',step:'0.01'}
+  ],values:{...current,residentSelection:current.resident===true?'yes':'no'},onSubmit:async values=>{
+    const next={...current,date:values.date,adults:Math.max(1,Math.min(9,num(values.adults)||5)),resident:values.residentSelection==='yes',reservedPrice:Math.max(0,num(values.reservedPrice))};
+    if(stageMonitorIdentity('binter',current)!==stageMonitorIdentity('binter',next)){
+      next.currentPrice=0;next.priceHistory=[];next.lastUpdated='';next.lastError='';next.monitorStatus='pending';
+    }
+    delete next.residentSelection;stage.binter=next;
+    if(await saveSection('stages')===false)throw new Error('No se pudieron guardar los datos del vuelo.');
+    render();
+    try{await syncStageMonitor('binter');toast('Binter · seguimiento diario sincronizado con GitHub.');}
+    catch(error){toast('Binter guardado. Automatización pendiente: '+error.message,'error');}
+  }});
+}
+
+function renderStage2TrackerCards(kind='hotel'){
   if(!multiStageEnabled())return '';
   const stage=tripStages()[1];if(!stage)return '';
   const card=kind=>{
-    const item=stage[kind]||{},hotel=kind==='hotel',title=hotel?'Hotel Dunas Club · semana 2':'AutoReisen · semana 2';
+    const item=kind==='binter'?stageBinterItem():(stage[kind]||{}),hotel=kind==='hotel',binter=kind==='binter',title=binter?'Binter · vuelo entre islas':hotel?'Hotel Dunas Club · semana 2':'AutoReisen · semana 2';
     const reserved=num(item.reservedPrice),current=num(item.currentPrice),history=item.priceHistory||[];
     const ready=stageMonitorConfigReady(kind,item),status=item.lastError?`Último intento: ${item.lastError}`:item.lastUpdated?`Último precio confirmado: ${formatDate(item.lastUpdated,{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}`:ready?'Sin precio automático confirmado para estas fechas y ocupación.':'Configura primero las fechas.';
-    const url=hotel?(item.website||'https://www.hoteldunasclub.es/reservar.html'):(item.url||'https://www.autoreisen.com/');
-    const note=hotel?`Ocupación: ${num(item.adults)||5} adultos · ${num(item.rooms)||3} habitación(es) · ${esc(item.targetRoom||'Cualquier habitación')}`:[item.pickup||'Fuerteventura',item.model||item.group||'Vehículo pendiente'].join(' · ');
-    return `<section class="card stage-track-card"><div class="section-title" style="--g1:${hotel?'#314a63':'#275032'};--g2:${hotel?'#4e6c88':'#407b52'}"><span>${hotel?'🏨':'🚗'} ${esc(title)} · ${esc(stage.island||'Segunda isla')}</span><div class="row-actions">${canEdit()?`<button class="mini-btn" data-stage-monitor-refresh="${kind}" title="Consultar precio ahora" ${ready?'':'disabled'}>↻</button><button class="mini-btn" data-stage-edit-reservation="1:${kind}" title="Configurar seguimiento">✎</button>`:''}</div></div><div class="card-body"><strong>${esc(hotel?item.name||'Hotel Dunas Club':item.provider||'AutoReisen')}</strong><p class="muted">${esc(note)} · ${esc(hotel?`${item.checkIn||'—'} al ${item.checkOut||'—'}`:`${item.pickupAt||'—'} → ${item.dropoffAt||'—'}`)}</p><div class="stage-monitor-values"><div><small>Reservado</small><b>${reserved?formatMoney(reserved):'—'}</b></div><div><small>Última consulta</small><b>${current?formatMoney(current):'—'}</b></div><div><small>Variación</small><b>${current&&reserved?formatMoney(current-reserved):'—'}</b></div></div><p class="muted">${esc(status)} · ${history.length} consultas guardadas. ${hotel?'El monitor solo registra importes finales verificables para habitación, fechas y personas.':'Los importes corresponden solo al alquiler en Fuerteventura.'}</p><div class="page-actions">${safeLink(url,'Web oficial','🌐')}</div>${history.length?`<div class="stage-monitor-history">${history.slice(-5).reverse().map(h=>`<span>${formatDate(h.t)} · ${formatMoney(h.price)}</span>`).join('')}</div>`:''}${history.length>1?trackerSingleHistoryChart(history.map(x=>({date:x.t,price:x.price})),hotel?'Dunas Club':'AutoReisen Fuerteventura'):''}</div></section>`;
+    const url=binter?'https://www.bintercanarias.com/es/buscar-vuelos':hotel?(item.website||'https://www.hoteldunasclub.es/reservar.html'):(item.url||'https://www.autoreisen.com/');
+    const note=binter?`LPA → FUE · ${num(item.adults)||5} adultos · ${item.resident===true?'Residentes':'No residentes'}`:hotel?`Ocupación: ${num(item.adults)||5} adultos · ${num(item.rooms)||1} habitación(es) · ${esc(item.targetRoom||'Cualquier habitación')}`:[item.pickup||'Fuerteventura',item.model||item.group||'Vehículo pendiente'].join(' · ');
+    return `<section class="card stage-track-card" data-tracker-card="stage-${kind}" data-sort-item="tracker|stage-${kind}"><div class="section-title" style="--g1:${hotel?'#314a63':'#275032'};--g2:${hotel?'#4e6c88':'#407b52'}"><span>${binter?'✈️':hotel?'🏨':'🚗'} ${esc(title)} · ${esc(stage.island||'Segunda isla')}</span><div class="row-actions">${canEdit()?`${sortDragHandle(`tracker|stage-${kind}`,'Reordenar seguimiento')}<button class="mini-btn" data-stage-monitor-refresh="${kind}" title="Consultar precio ahora" ${ready?'':'disabled'}>↻</button><button class="mini-btn" ${binter?'data-stage-edit-binter':'data-stage-edit-reservation="1:'+kind+'"'} title="Configurar seguimiento">✎</button>`:''}</div></div><div class="card-body"><strong>${esc(binter?'Binter · Gran Canaria a Fuerteventura':hotel?item.name||'Hotel Dunas Club':item.provider||'AutoReisen')}</strong><p class="muted">${esc(note)} · ${esc(binter?(item.date||'Fecha pendiente'):hotel?`${item.checkIn||'—'} al ${item.checkOut||'—'}`:`${item.pickupAt||'—'} → ${item.dropoffAt||'—'}`)}</p><div class="stage-monitor-values"><div><small>Reservado</small><b>${reserved?formatMoney(reserved):'—'}</b></div><div><small>Última consulta</small><b>${current?formatMoney(current):'—'}</b></div><div><small>Variación</small><b>${current&&reserved?formatMoney(current-reserved):'—'}</b></div></div><p class="muted">${esc(status)} · ${history.length} consultas guardadas. ${binter?'Solo se registra el total completo de los pasajeros, no tarifas individuales.':hotel?'El monitor solo registra importes finales verificables para habitación, fechas y personas.':'Los importes corresponden solo al alquiler en Fuerteventura.'}</p><div class="page-actions">${safeLink(url,'Web oficial','🌐')}</div>${history.length?`<div class="stage-monitor-history">${history.slice(-5).reverse().map(h=>`<span>${formatDate(h.t)} · ${formatMoney(h.price)}</span>`).join('')}</div>`:''}${history.length>1?trackerSingleHistoryChart(history.map(x=>({date:x.t,price:x.price})),hotel?'Dunas Club':'AutoReisen Fuerteventura'):''}</div></section>`;
   };
-  return `${card('hotel')}${card('car')}`;
+  return card(kind);
 }
 
 function renderTrackers(){
   synchronizeTrackerTripDataLocally();
-  const t=state.data.trackers,ordered=(t.order||['autoreisen','cordial','vueling','fuel']).filter(id=>['autoreisen','cordial','vueling','fuel'].includes(id));
+  const t=state.data.trackers,allowed=['autoreisen','cordial','vueling','fuel',...(multiStageEnabled()?['stage-hotel','stage-car','stage-binter']:[])],ordered=[...new Set([...(t.order||[]),...allowed])].filter(id=>allowed.includes(id));
   const statusText=(x,id)=>{const base=x.lastError&&x.lastUpdated?`Último dato válido: ${formatDate(x.lastUpdated,{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}. Último intento fallido: ${x.lastError}`:x.lastUpdated?`Actualizado automáticamente ${formatDate(x.lastUpdated,{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}`:x.lastError?`Último intento fallido: ${x.lastError}`:'Sin consulta automática disponible todavía';return `${base}${monitorFallbackStatusSuffix(id)}`;};
-  const cards={autoreisen:()=>renderAutoreisenTrackerCard(x=>statusText(x,'autoreisen')),cordial:()=>renderCordialTrackerCard(x=>statusText(x,'cordial')),vueling:()=>renderVuelingTrackerCard(x=>statusText(x,'vueling')),fuel:renderFuelTrackerCard};
-  return `${lockedBanner()}${pageHead('Seguimientos','Alojamiento, vuelos, coche de alquiler y gasolina en tarjetas reordenables','')}${trackerSummaryStrip()}${monitorFallbackBanner()}<div class="tracker-grid">${ordered.filter(id=>t.visible?.[id]!==false).map(id=>cards[id]?.()||'').join('')}${renderStage2TrackerCards()}</div>`;
+  const cards={autoreisen:()=>renderAutoreisenTrackerCard(x=>statusText(x,'autoreisen')),cordial:()=>renderCordialTrackerCard(x=>statusText(x,'cordial')),vueling:()=>renderVuelingTrackerCard(x=>statusText(x,'vueling')),fuel:renderFuelTrackerCard,'stage-hotel':()=>renderStage2TrackerCards('hotel'),'stage-car':()=>renderStage2TrackerCards('car'),'stage-binter':()=>renderStage2TrackerCards('binter')};
+  return `${lockedBanner()}${pageHead('Seguimientos','Alojamiento, vuelos, coche de alquiler y gasolina en tarjetas reordenables','')}${trackerSummaryStrip()}${monitorFallbackBanner()}<div class="tracker-grid">${ordered.filter(id=>t.visible?.[id]!==false).map(id=>cards[id]?.()||'').join('')}</div>`;
 }
 binders.trackers=()=>{
   bindStageControls();
