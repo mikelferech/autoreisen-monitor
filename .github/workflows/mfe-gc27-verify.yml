@@ -22,6 +22,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Restaurar Worker desde ZIP y aplicar cambios sin truncar ficheros
+        run: node gc27-src/scripts/patch-worker-gc27.cjs
       - name: Verificar sintaxis JS y JSON
         run: |
           node --check gc27-src/public/app.js
@@ -44,7 +46,7 @@ jobs:
           unzip -t mobile-release/MFE_Viajes_RELEASE.zip | tail -2
           git config user.name "MFE GC27 updater"
           git config user.email "mfe-gc27@users.noreply.github.com"
-          git add mobile-release/MFE_Viajes_RELEASE.zip
+          git add mobile-release/MFE_Viajes_RELEASE.zip gc27-src/CLOUDFLARE_WORKER_v2_2_54.js
           if ! git diff --cached --quiet; then
             git commit -m "build: MFE GC27 ZIP with fixes"
             git push origin "HEAD:${GITHUB_REF_NAME}"
