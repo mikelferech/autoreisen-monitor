@@ -1093,10 +1093,11 @@ function accuWeatherAndroidIntentUrl(){
   const parsed=new URL(appUrl);
   return `intent://${parsed.host}${parsed.pathname}${parsed.search}${parsed.hash}#Intent;scheme=https;package=com.accuweather.android;S.browser_fallback_url=${encodeURIComponent(fallback)};end`;
 }
-function renderAccuWeatherButton(extraClass=''){
-  const webUrl=accuWeatherForecastUrl();
+function renderAccuWeatherButton(extraClass='', webUrlOverride=''){
+  const alternate=String(webUrlOverride||'').trim();
+  const webUrl=alternate||accuWeatherForecastUrl();
   const openNative=nativeAppsEnabled()&&androidDevice();
-  const href=openNative?accuWeatherAndroidIntentUrl():webUrl;
+  const href=openNative?(alternate?accuWeatherAndroidIntentUrl().replace(encodeURIComponent(accuWeatherForecastUrl()),encodeURIComponent(alternate)):accuWeatherAndroidIntentUrl()):webUrl;
   const external=openNative?'':' target="_blank" rel="noopener"';
   const className=`link-btn accuweather-icon-link${String(extraClass||'').trim()?` ${esc(String(extraClass).trim())}`:''}`;
   return `<a class="${className}" href="${esc(href)}"${external} title="Abrir AccuWeather" aria-label="Abrir AccuWeather">${accuweatherIconMarkup()}</a>`;
@@ -2554,7 +2555,7 @@ function renderStages(){
   if(!enabled)return `${lockedBanner()}${pageHead('Etapas','Preparación del viaje multietapa',actions)}${intro}`;
   const flights=state.data.cover.flights||[];
   const travelersMarkup=`<section class="card stage-travelers"><div class="section-title"><span>👥 Viajeros · ${people} personas</span></div><div class="card-body">${(state.data.stages.travelers||[]).map((v,i)=>`<span class="stage-traveler-pill">${esc(v)}</span>`).join('')}<p class="muted">Maletas personales en sus pestañas; puedes asignar los nombres en «Viajeros».</p></div></section>`;
-  const flightMarkup=`<section class="card stage-flight-section"><div class="section-title"><span>✈️ Vuelos y conexiones</span>${canEdit()?`<div class="row-actions"><button class="mini-btn" data-stage-add-interisland title="Añadir vuelo interinsular Binter">Binter ＋</button><button class="mini-btn" data-stage-add-flight title="Añadir vuelo">＋</button></div>`:''}</div><div class="card-body">${flights.map((flight,i)=>`<div class="stage-flight-row"><div><b>${esc(flight.airline||flight.number||'Vuelo pendiente')}</b><span>${esc(flight.from||'Origen por definir')} → ${esc(flight.to||'Destino por definir')}</span><small>${esc(flight.date||'Fecha pendiente')} · ${esc(flight.number||'Número pendiente')}</small></div>${canEdit()?`<button class="mini-btn" data-stage-edit-flight="${i}" title="Editar vuelo">✎</button>`:''}</div>`).join('')||'<div class="empty">Añade el vuelo de ida, el interinsular y el regreso.</div>'}</div><div class="card-body"><p class="muted">Añade un vuelo Binter de tipo «ESCALA» para el traslado entre islas. Los datos de cada vuelo son independientes.</p></div></section>`;
+  const flightMarkup=`<section class="card stage-flight-section"><div class="section-title"><span>✈️ Vuelos y conexiones</span>${canEdit()?`<div class="row-actions stage-flight-actions"><button type="button" class="btn secondary small stage-flight-add-btn" data-stage-add-interisland title="Añadir vuelo Gran Canaria a Fuerteventura">✈️ Añadir Binter</button><button type="button" class="btn secondary small stage-flight-add-btn" data-stage-add-flight title="Añadir otro vuelo">＋ Otro vuelo</button></div>`:''}</div><div class="card-body">${flights.map((flight,i)=>`<div class="stage-flight-row"><div><b>${esc(flight.airline||flight.number||'Vuelo pendiente')}</b><span>${esc(flight.from||'Origen por definir')} → ${esc(flight.to||'Destino por definir')}</span><small>${esc(flight.date||'Fecha pendiente')} · ${esc(flight.number||'Número pendiente')}</small></div>${canEdit()?`<button class="mini-btn" data-stage-edit-flight="${i}" title="Editar vuelo">✎</button>`:''}</div>`).join('')||'<div class="empty">Añade el vuelo de ida, el interinsular y el regreso.</div>'}</div><div class="card-body"><p class="muted">Añade un vuelo Binter de tipo «ESCALA» para el traslado entre islas. Los datos de cada vuelo son independientes.</p></div></section>`;
   return `${lockedBanner()}${pageHead('Etapas',`Viaje por dos islas · ${people} viajeros`,actions)}${intro}<div class="stage-card-grid">${stages.map((stage,index)=>`<section class="stage-block"><div class="section-title" style="--g1:#173b61;--g2:#285f91"><span>🏝️ ${esc(stageTitle(stage,index))}</span>${canEdit()?`<button class="mini-btn" data-stage-edit="${index}" title="Editar semana, isla y fechas">✎</button>`:''}</div><div class="stage-dates">${stage.start?formatDate(stage.start):'Inicio pendiente'} — ${stage.end?formatDate(stage.end):'Final pendiente'}</div>${stageReservationCard(index,'hotel',true)}${stageReservationCard(index,'car',true)}</section>`).join('')}</div>${travelersMarkup}${flightMarkup}${stagePurchasesSummary()}`;
 }
 function editTripStage(index){
@@ -2595,6 +2596,7 @@ function editStageReservation(index,kind='hotel'){
     {name:'name',label:'Nombre del alojamiento',required:true,full:true},{name:'checkIn',label:'Entrada',type:'date'},{name:'checkOut',label:'Salida',type:'date'},
     {name:'address',label:'Dirección',full:true},{name:'website',label:'Web',type:'url',full:true},
     {name:'mapsUrl',label:'Google Maps',type:'url',full:true},{name:'imageUrl',label:'Foto · URL',type:'url',full:true,driveImage:true},
+    {name:'googleReviewsUrl',label:'Google · Opiniones',type:'url',full:true},{name:'tripadvisorReviewsUrl',label:'Tripadvisor · Opiniones',type:'url',full:true},{name:'bookingReviewsUrl',label:'Booking · Opiniones',type:'url',full:true},{name:'checkinUrl',label:'Check-in online',type:'url',full:true},
     {name:'adults',label:'Adultos en la búsqueda',type:'number',min:1,max:5},{name:'rooms',label:'Habitaciones',type:'number',min:1,max:5},
     {name:'targetRoom',label:'Tipo de habitación (Cualquier habitación o Suite)',full:true},{name:'targetBoard',label:'Régimen buscado (ej. Solo alojamiento)'},
     ...common
@@ -2606,12 +2608,12 @@ function editStageReservation(index,kind='hotel'){
     {name:'kmInitial',label:'Kilómetros iniciales',type:'number',step:'0.1'},
     {name:'kmFinal',label:'Kilómetros finales',type:'number',step:'0.1'},...common
   ];
-  openForm({title:`${hotel?'Hotel':'Coche'} · ${stageTitle(stage,index)}`,fields,values:hotel?{...item,name:item.name||(isFuerteventura?'Hotel Dunas Club':''),website:item.website||(isFuerteventura?'https://www.hoteldunasclub.es/reservar.html':''),adults:item.adults||5,rooms:item.rooms||3,targetRoom:item.targetRoom||'Cualquier habitación',targetBoard:item.targetBoard||'Solo alojamiento'}:{...item,provider:item.provider||'AutoReisen',pickup:item.pickup||(isFuerteventura?'Fuerteventura (FUE)':''),dropoff:item.dropoff||(isFuerteventura?'Fuerteventura (FUE)':''),pickupOfficeId:item.pickupOfficeId||(isFuerteventura?'19':''),dropoffOfficeId:item.dropoffOfficeId||(isFuerteventura?'19':''),url:item.url||'https://www.autoreisen.com/'},onSubmit:async v=>{
+  openForm({title:`${hotel?'Hotel':'Coche'} · ${stageTitle(stage,index)}`,fields,values:hotel?{...item,name:item.name||(isFuerteventura?'Hotel Dunas Club':''),website:item.website||(isFuerteventura?'https://www.hoteldunasclub.es/reservar.html':''),adults:item.adults||5,rooms:item.rooms||1,targetRoom:item.targetRoom||'Cualquier habitación',targetBoard:item.targetBoard||'Solo alojamiento'}:{...item,provider:item.provider||'AutoReisen',pickup:item.pickup||(isFuerteventura?'Fuerteventura (FUE)':''),dropoff:item.dropoff||(isFuerteventura?'Fuerteventura (FUE)':''),pickupOfficeId:item.pickupOfficeId||(isFuerteventura?'19':''),dropoffOfficeId:item.dropoffOfficeId||(isFuerteventura?'19':''),url:item.url||'https://www.autoreisen.com/'},onSubmit:async v=>{
     if(hotel&&v.checkIn&&v.checkOut&&v.checkOut<v.checkIn)throw new Error('La salida debe ser posterior a la entrada.');
     const checkedPrice=Math.max(0,num(v.currentPrice));
     const changed=checkedPrice>0&&checkedPrice!==num(item.currentPrice);
     const contextChanged=hotel?(String(item.checkIn||'')!==String(v.checkIn||'')||String(item.checkOut||'')!==String(v.checkOut||'')||String(item.targetRoom||'Cualquier habitación')!==String(v.targetRoom||'Cualquier habitación')||num(item.adults||5)!==num(v.adults||5)||num(item.rooms||1)!==num(v.rooms||1)):(String(item.pickupAt||'')!==String(v.pickupAt||'')||String(item.dropoffAt||'')!==String(v.dropoffAt||'')||String(item.pickupOfficeId||'')!==String(v.pickupOfficeId||'')||String(item.dropoffOfficeId||'')!==String(v.dropoffOfficeId||'')||String(item.model||'')!==String(v.model||''));
-    stage[kind]={...item,...v,adults:hotel?Math.max(1,Math.min(5,num(v.adults)||5)):item.adults,rooms:hotel?Math.max(1,Math.min(5,num(v.rooms)||3)):item.rooms,reservedPrice:Math.max(0,num(v.reservedPrice)),currentPrice:contextChanged?0:checkedPrice,lastUpdated:contextChanged?'':item.lastUpdated||'',lastError:contextChanged?'':item.lastError||'',monitorStatus:contextChanged?'pending':item.monitorStatus||'pending',priceHistory:contextChanged?[]:(changed?[...(item.priceHistory||[]),{t:new Date().toISOString(),price:checkedPrice,source:'manual'}].slice(-150):(item.priceHistory||[]))};
+    stage[kind]={...item,...v,adults:hotel?Math.max(1,Math.min(5,num(v.adults)||5)):item.adults,rooms:hotel?Math.max(1,Math.min(5,num(v.rooms)||1)):item.rooms,reservedPrice:Math.max(0,num(v.reservedPrice)),currentPrice:contextChanged?0:checkedPrice,lastUpdated:contextChanged?'':item.lastUpdated||'',lastError:contextChanged?'':item.lastError||'',monitorStatus:contextChanged?'pending':item.monitorStatus||'pending',priceHistory:contextChanged?[]:(changed?[...(item.priceHistory||[]),{t:new Date().toISOString(),price:checkedPrice,source:'manual'}].slice(-150):(item.priceHistory||[]))};
     const saved=await saveSection('stages');if(saved===false)throw new Error('No se ha guardado la etapa.');
     render();
     if(stageMonitorConfigReady(kind,stage[kind])){try{await syncStageMonitor(kind);toast(`${binter?'Binter':hotel?'Dunas Club':'AutoReisen Fuerteventura'} · seguimiento diario sincronizado con GitHub.`);}catch(error){toast(`Reserva guardada. Seguimiento automático pendiente: ${error.message}`,'error');}}
@@ -2683,7 +2685,7 @@ function renderSecondStageWeather(){
  const stage=tripStages()[1];if(!stage)return '';
  const value=state.stageWeather?.[stage.id],title=stage.weatherPlace||stage.island||'Destino por definir';
  const weatherMarkup=value?`<div class="weather-current"><div class="weather-icon">${esc(value.current?.icon||'🌤️')}</div><div><div class="weather-temp">${esc(value.current?.temp??'—')} °C</div><div class="weather-text">${esc(value.current?.text||'')}${Number.isFinite(value.current?.apparent)?` · Sensación ${esc(value.current.apparent)} °C`:''}</div></div></div><div class="forecast-row">${(value.forecast||[]).map(d=>`<div class="forecast-day"><strong>${formatDate(d.date,{weekday:'short'})}</strong><div style="font-size:26px">${esc(d.icon||'☀️')}</div><div class="temps">${esc(d.max)}° <span>${esc(d.min)}°</span></div><small class="muted">${esc(d.text||'')}</small></div>`).join('')}</div>`:`<div class="card-body"><p class="muted">${stage.weatherPlace?'Pulsa actualizar para consultar la previsión de esta isla.':'Configura la localidad de la segunda isla en Etapas para ver su pronóstico.'}</p></div>`;
- return `<div class="card weather-panel stage-weather-panel"><div class="section-title" style="--g1:#183955;--g2:#315e8b"><span>🌤️ ${esc(stageTitle(stage,1))} · ${esc(title)}</span><div class="row-actions">${canEdit()?`<button class="mini-btn" data-stage-edit="1" title="Editar localidad">✎</button>`:''}<button class="mini-btn" data-stage-weather-refresh="${esc(stage.id)}" title="Actualizar previsión">↻</button></div></div>${weatherMarkup}</div>`;
+ return `<div class="card weather-panel stage-weather-panel"><div class="section-title" style="--g1:#183955;--g2:#315e8b"><span>🌤️ ${esc(stageTitle(stage,1))} · ${esc(title)}</span><div class="row-actions">${renderAccuWeatherButton("weather-accuweather-link stage-accuweather","https://www.accuweather.com/es/search-locations?query=Corralejo%2C%20Fuerteventura")}${canEdit()?`<button class="mini-btn" data-stage-edit="1" title="Editar localidad">✎</button>`:''}<button class="mini-btn" data-stage-weather-refresh="${esc(stage.id)}" title="Actualizar previsión">↻</button></div></div>${weatherMarkup}</div>`;
 }
 async function refreshStageWeather(id){
  const stage=tripStages().find(item=>item.id===id);if(!stage?.weatherPlace)return;
@@ -8553,8 +8555,8 @@ async function refreshMonitorFallbackStatus({force=false,rerender=false}={}){
 // v2.4.33 · Monitores autónomos para AutoReisen Fuerteventura y Hotel Dunas Club.
 const STAGE_MONITOR_TYPES={car:'autoreisen-stage2',hotel:'dunas',binter:'binter-stage2'};
 function stageBinterItem(){
-  const stage=tripStages()[1]||{},saved=stage.binter||{},flight=(state.data.cover?.flights||[]).find(f=>/binter/i.test(f.airline||'')||/^NT\\s*\\d/i.test(f.number||''));
-  return {date:flight?.date||stage.start||'',origin:'LPA',destination:'FUE',adults:Math.max(1,num(state.data.settings?.people)||5),resident:false,...saved};
+  const stage=tripStages()[1]||{},saved=stage.binter||{},flight=(state.data.cover?.flights||[]).find(f=>/binter/i.test(f.airline||'')||/^NT\s*\d/i.test(f.number||''));
+  return {date:(String(flight?.date||'').slice(0,4)===String(stage.start||'').slice(0,4)?flight.date:stage.start)||'',origin:'LPA',destination:'FUE',adults:Math.max(1,num(state.data.settings?.people)||5),resident:false,...saved};
 }
 function stageMonitorIdentity(kind,item={}){
   if(kind==='binter')return [item.date||'',item.origin||'LPA',item.destination||'FUE',Number(item.adults)||5,item.resident===true?'resident':'no-resident'].join('|');
@@ -8562,7 +8564,7 @@ function stageMonitorIdentity(kind,item={}){
     [item.checkIn,item.checkOut,String(item.adults||5),String(item.rooms||3),String(item.targetRoom||'Cualquier habitación')].map(x=>String(x||'').trim()).join('|');
 }
 function stageMonitorConfigReady(kind,item={}){
-  if(kind==='binter')return /^\\d{4}-\\d{2}-\\d{2}$/.test(String(item.date||''));
+  if(kind==='binter')return /^\d{4}-\d{2}-\d{2}$/.test(String(item.date||''));
   return kind==='car'?/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(String(item.pickupAt||''))&&/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(String(item.dropoffAt||'')):
     /^\d{4}-\d{2}-\d{2}$/.test(String(item.checkIn||''))&&/^\d{4}-\d{2}-\d{2}$/.test(String(item.checkOut||''));
 }
@@ -8579,7 +8581,7 @@ function stageMonitorConfig(kind){
     reservedPrice:num(item.reservedPrice),searchUrl:'https://www.autoreisen.com/alquiler-coches/alquiler-de-coches.php',
     fleetTrackAll:true,enabled:true};
   return {hotel:'Hotel Dunas Club',checkIn:item.checkIn,checkOut:item.checkOut,
-    adults:Math.max(1,Math.min(5,num(item.adults)||5)),rooms:Math.max(1,Math.min(5,num(item.rooms)||3)),
+    adults:Math.max(1,Math.min(5,num(item.adults)||5)),rooms:Math.max(1,Math.min(5,num(item.rooms)||1)),
     targetRoom:item.targetRoom||'Cualquier habitación',targetBoard:item.targetBoard||'Solo alojamiento',
     searchUrl:'https://www.hoteldunasclub.es/reservar.html',reservedPrice:num(item.reservedPrice),enabled:true};
 }
