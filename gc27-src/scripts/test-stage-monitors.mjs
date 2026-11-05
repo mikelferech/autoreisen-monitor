@@ -10,7 +10,7 @@ assert.equal(parseFinal('Hotel Dunas Club\n2 Habitaciones de 3\nTotal Estancia\n
 assert.equal(parseFinal('Total Habitación 640,80 €\nTotal Estancia 640,80 €',{adults:5,rooms:3}),null);
 assert.equal(parseFinal('5Adultos\n3 Habitaciones de 3\nSin habitación seleccionada\nTotal Estancia 2500,00 €',{adults:5,rooms:3}),null);
 const app=readFileSync(new URL('../public/app.js',import.meta.url),'utf8');
-assert.match(app,/STAGE_MONITOR_TYPES=\\{car:'autoreisen-stage2',hotel:'dunas',binter:'binter-stage2'\\}/);
+assert.match(app,/STAGE_MONITOR_TYPES=\{car:'autoreisen-stage2',hotel:'dunas',binter:'binter-stage2'\}/);
 assert.match(app,/github-stage-monitor-sync/);
 assert.match(app,/data-stage-monitor-refresh/);
 assert.match(app,/stageMonitorIdentity/);
