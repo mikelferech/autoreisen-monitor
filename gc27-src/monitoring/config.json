@@ -70,5 +70,14 @@
         "to": "Bilbao (BIO)"
       }
     ]
+  },
+  "binterStage2": {
+    "enabled": true,
+    "date": "2027-09-13",
+    "origin": "LPA",
+    "destination": "FUE",
+    "adults": 5,
+    "resident": false,
+    "reservedPrice": 0
   }
 }
