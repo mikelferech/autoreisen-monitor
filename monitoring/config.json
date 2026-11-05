@@ -92,5 +92,34 @@
         "to": "Bilbao (BIO)"
       }
     ]
+  },
+  "autoreisenStage2": {
+    "pickup": "Fuerteventura - Aeropuerto",
+    "dropoff": "Fuerteventura - Aeropuerto",
+    "pickupOfficeId": "19",
+    "dropoffOfficeId": "19",
+    "pickupAt": "2027-09-13T13:00",
+    "dropoffAt": "2027-09-20T16:00",
+    "group": "D",
+    "model": "Dacia Sandero Stepway Autom.",
+    "carId": "",
+    "reservedPrice": 0,
+    "searchUrl": "https://www.autoreisen.com/alquiler-coches/alquiler-de-coches.php",
+    "enabled": true,
+    "fleetTrackAll": true,
+    "fleetTrackGroups": [],
+    "intervalHours": 24,
+    "scheduleMode": "daily",
+    "scheduleTime": "06:30",
+    "scheduleTimeZone": "Europe/Madrid",
+    "telegramMinDropAmount": 0,
+    "telegramMinDropPercent": 0,
+    "telegramEnabled": true,
+    "telegramNotifyEveryCheck": true,
+    "telegramNotifyPriceDrop": true,
+    "telegramNotifyBelowReserved": true,
+    "telegramNotifyAvailability": true,
+    "telegramNotifyError": true,
+    "telegramNotifyRecovery": true
   }
 }
