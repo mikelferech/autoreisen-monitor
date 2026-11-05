@@ -73,3 +73,5 @@ export async function monitorDunas(browser,config){
     return {ok:true,status:'ok',price:final,total:final,source:'Hotel Dunas Club · Keytel · precio completo verificado',rooms,adults,checkIn:config.checkIn,checkOut:config.checkOut,targetRoom:config.targetRoom||'',targetBoard:config.targetBoard||'',url,roomChoices:candidates};
   }finally{await ctx.close();}
 }
+
+export {quoteUrl,parseFinal};
