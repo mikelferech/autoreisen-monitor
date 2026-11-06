@@ -1,4 +1,4 @@
-// MFE_CORDIAL_AUTOMATION_VERSION: 2.2.12
+// MFE_CORDIAL_AUTOMATION_VERSION: 2.2.13
 import {isoNow,snapshot,acceptCookies} from './lib.mjs';
 
 const normalize=value=>String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/\s+/g,' ').trim();
@@ -505,111 +505,70 @@ async function fillDateInputs(page,config){
 }
 async function setAdults(page,config){
   const adults=Math.max(1,Number(config.adults)||2);
-  // BeCordial emplea actualmente un selector de huéspedes personalizado:
-  // #id_paxes (resumen de solo lectura), #who_popup y div.adults .action-up/down.
-  // No hay un input[name=adults] en el formulario de reservas.
   const summary=page.locator('#id_paxes').first();
   const popup=page.locator('#who_popup').first();
+  // El selector real de BeCordial no contiene un input[name="adults"]:
+  // la ocupación está en #who_popup y se envía con input[name="allocations"].
   if(await summary.count().catch(()=>0)&&await popup.count().catch(()=>0)){
-    const openerHtml=await summary.evaluate(el=>el.parentElement?.outerHTML.slice(0,1600)||'').catch(()=>'');
-    console.log('[cordial] Contenedor huéspedes:',openerHtml.replace(/\\s+/g,' ').slice(0,1600));
-    // El input #id_paxes es readonly. En BeCordial el clic se atiende en su contenedor.
-    const openers=[
-      page.locator('.input-like.who,.input-like.paxes,.pick-pax-trigger,[data-target="#who_popup"]').first(),
-      summary.locator('xpath=..'),
-      summary
-    ];
-    for(const opener of openers){
-      if(await popup.isVisible().catch(()=>false))break;
-      if(!await opener.count().catch(()=>0))continue;
-      await opener.click({force:true,timeout:1800}).catch(()=>{});
-      await page.waitForTimeout(170);
-    }
-    let popupOpened=await popup.isVisible().catch(()=>false);
-    if(!popupOpened){
-      // El popup ya existe con contadores/listeners, pero el wrapper antiguo no lo
-      // activa en Chrome headless. Abrirlo solo visualmente permite pulsar su JS nativo.
-      await popup.evaluate(el=>{el.style.display='block';el.style.visibility='visible';}).catch(()=>{});
-      popupOpened=await popup.isVisible().catch(()=>false);
-    }
-    console.log(`[cordial] Panel de huéspedes abierto=${popupOpened?'sí':'no'}`);
     const counter=popup.locator('.room .adults').first();
     if(await counter.count().catch(()=>0)){
       const qty=counter.locator('.qty').first();
-      const read=async()=>Number.parseInt(String(await qty.textContent().catch(()=>'' )).trim(),10);
+      const read=async()=>Number.parseInt(String(await qty.textContent().catch(()=>'')).trim(),10);
       let current=await read();
-      console.log(`[cordial] Selector de huéspedes: adultos iniciales=${Number.isFinite(current)?current:'—'} · solicitados=${adults}`);
+      console.log(`[cordial] Huéspedes: ${current} adultos iniciales; solicitados ${adults}.`);
       if(Number.isFinite(current)){
         for(let step=0;step<Math.min(Math.abs(adults-current),15);step++){
-          const up=adults>current;
-          const control=counter.locator(up?'.action-up':'.action-down').first();
-          if(!await control.count().catch(()=>0))break;
-          const before=await read();
-          let clickError='';
-          let clicked=await control.click({force:true,timeout:2000}).then(()=>true).catch(e=>{clickError=String(e?.message||e).slice(0,230);return false;});
-          if(!clicked){
-            clicked=await control.evaluate(el=>{el.click();return true;}).catch(()=>false);
-          }
+          const button=counter.locator(adults>current?'.action-up':'.action-down').first();
+          if(!await button.count().catch(()=>0))break;
+          const before=current;
+          // La capa del popup está oculta en GitHub Actions, pero los listeners
+          // del contador están instalados y el clic nativo actualiza allocations.
+          const clicked=await button.evaluate(el=>{el.click();return true;}).catch(()=>false);
+          if(!clicked)break;
           await page.waitForTimeout(150);
           current=await read();
-          console.log(`[cordial] Contador adultos paso ${step+1}: ${before}→${current} · clic=${clicked?'sí':'no'}${clickError?` · detalle=${clickError}`:''}`);
-          if(!clicked)break;
-          if(!Number.isFinite(current)||current===before)break;
-          if(current===adults)break;
+          if(!Number.isFinite(current)||current===before||current===adults)break;
         }
-        // El resumen visual lo actualiza el JS original, junto a allocations.
-        await page.locator('label').filter({hasText:/hu[eé]spedes/i}).first().click({force:true,timeout:1200}).catch(()=>{});
-        await page.waitForTimeout(200);
-        const finalQty=await read();
-        const display=String(await summary.inputValue().catch(()=>'' )).trim();
-        const allocations=String(await page.locator('input[name="allocations"]').first().inputValue().catch(()=>'' )).trim();
-        console.log(`[cordial] Huéspedes tras ajuste: contador=${finalQty} · resumen=${display||'—'} · allocations=${allocations.slice(0,350)||'—'}`);
-        if(finalQty===adults&&new RegExp(`\\b${adults}\\s+adultos?\\b`,'i').test(display)){
-          console.log(`[cordial] Ocupación confirmada con el selector nativo: ${adults} adultos.`);
-          return true;
-        }
-        // El widget general limita sus botones a cuatro adultos, pero Beach Club House
-        // admite seis. Para esta habitación y ocupación, conservar la selección de
-        // UNA habitación y preparar allocations con los cinco adultos reales.
-        if(finalQty<adults&&adults===5&&normalize(config.targetRoom||'')==='beach club house'){
-          const allocationField=page.locator('input[name="allocations"]').first();
+        const actual=await read();
+        const display=String(await summary.inputValue().catch(()=>'')).trim();
+        const allocationField=page.locator('input[name="allocations"]').first();
+        const allocations=String(await allocationField.inputValue().catch(()=>'')).trim();
+        console.log(`[cordial] Ocupación por contador=${actual} · resumen=${display||'—'} · allocations=${allocations.slice(0,260)||'—'}`);
+        if(actual===adults&&new RegExp(`\\b${adults}\\s+adultos?\\b`,'i').test(display))return true;
+        // El contador genérico limita a 4 adultos; Beach Club House admite 6.
+        // Para el viaje configurado de 5 adultos en una sola habitación,
+        // preservar el modelo de BeCordial y verificar después la respuesta.
+        if(actual<adults&&adults===5&&normalize(config.targetRoom||'')==='beach club house'){
           try{
-            const previous=JSON.parse(allocations||'[]');
-            if(Array.isArray(previous)&&previous.length===1&&Number(previous[0]?.ch||0)===0){
-              previous[0].ad=adults;
-              previous[0].ages=Array.from({length:adults},()=>30);
-              const encoded=JSON.stringify(previous);
+            const parsed=JSON.parse(allocations||'[]');
+            if(Array.isArray(parsed)&&parsed.length===1&&Number(parsed[0]?.ch||0)===0){
+              parsed[0].ad=adults;
+              parsed[0].ages=Array.from({length:adults},()=>30);
+              const value=JSON.stringify(parsed);
               await qty.evaluate((el,v)=>{el.textContent=v;},String(adults));
-              const setA=await setControlValueRaw(allocationField,encoded);
-              const setS=await setControlValueRaw(summary,`${adults} adultos - 0 niños - 0 bebés`);
-              const actualAlloc=String(await allocationField.inputValue().catch(()=>''));
-              const actualDisplay=String(await summary.inputValue().catch(()=>''));
-              if(setA&&setS&&actualAlloc===encoded&&new RegExp(`\\b${adults}\\s+adultos?\\b`,'i').test(actualDisplay)){
-                console.log(`[cordial] Ocupación cinco adultos/una habitación preparada en allocations=${encoded}. Se verificará en los resultados del servidor.`);
+              const ok1=await setControlValueRaw(allocationField,value);
+              const ok2=await setControlValueRaw(summary,`${adults} adultos - 0 niños - 0 bebés`);
+              const actualAlloc=String(await allocationField.inputValue().catch(()=>'')).trim();
+              const actualDisplay=String(await summary.inputValue().catch(()=>'')).trim();
+              if(ok1&&ok2&&actualAlloc===value&&new RegExp(`\\b${adults}\\s+adultos?\\b`,'i').test(actualDisplay)){
+                console.log(`[cordial] Preparada ocupación 5 adultos/1 habitación: ${value}.`);
                 return true;
               }
             }
-          }catch(error){console.log(`[cordial] No se pudo preparar la ocupación 5/1: ${error?.message||String(error)}`);}
+          }catch(error){console.log(`[cordial] No se pudo preparar ocupación 5/1: ${error?.message||String(error)}`);}
         }
       }
     }
   }
-  // Compatibilidad con otras versiones del formulario de BeCordial.
   const inputs=page.locator('input[name*="adult" i],select[name*="adult" i]');
   if(await inputs.count()){
     const el=inputs.first();
     if((await el.evaluate(e=>e.tagName)).toLowerCase()==='select')await el.selectOption(String(adults)).catch(()=>{});
     else await forceControlValue(el,String(adults));
-    const actual=String(await el.inputValue().catch(()=>''));
-    if(actual===String(adults)){
-      console.log(`[cordial] Ocupación aplicada al campo: ${actual} adultos.`);
-      return true;
-    }
+    if(String(await el.inputValue().catch(()=>''))===String(adults))return true;
   }
-  const summaryText=String(await summary.inputValue().catch(()=>'' ));
-  if(new RegExp(`\\b${adults}\\s+adultos?\\b`,'i').test(summaryText))return true;
-  console.log(`[cordial] Ocupación sin confirmar; resumen actual=${summaryText||'—'}`);
-  return false;
+  const text=String(await summary.inputValue().catch(()=>'')).trim();
+  return new RegExp(`\\b${adults}\\s+adultos?\\b`,'i').test(text);
 }
 async function bookingResultReady(page){
   if(/\/booking\/process\/room/i.test(page.url()))return true;
