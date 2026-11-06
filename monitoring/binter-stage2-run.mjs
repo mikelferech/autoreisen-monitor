@@ -1,4 +1,4 @@
-// MFE_BINTER_STAGE2_MONITOR_VERSION: 1.0.0
+// MFE_BINTER_STAGE2_MONITOR_VERSION: 1.0.1
 // Solo se guarda un total completo y comprobado; nunca se extrapola un precio por persona.
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -34,9 +34,9 @@ async function scan(browser){
     await page.goto('https://www.bintercanarias.com/es/buscar-vuelos',{waitUntil:'domcontentloaded',timeout:65000});
     await page.waitForTimeout(3500);diagnostics.url=page.url();
     const initialPage=String(await page.locator('body').innerText().catch(()=>'' ));
-    if(/sorry,? you have been blocked|unable to access bintercanarias\\.com|cloudflare ray id|website is using a security service to protect itself/i.test(initialPage)){
+    if(/sorry,? you have been blocked|unable to access bintercanarias\.com|cloudflare ray id|website is using a security service to protect itself/i.test(initialPage)){
       await snapshot(page,'binter/01-bloqueo-seguridad').catch(()=>{});
-      const ray=(initialPage.match(/Cloudflare Ray ID\\s*:\\s*([a-z0-9]+)/i)||[])[1]||'';
+      const ray=(initialPage.match(/Cloudflare Ray ID\s*:\s*([a-z0-9]+)/i)||[])[1]||'';
       console.error('[binter] Página de bloqueo detectada antes del formulario.'+(ray?' Ray ID: '+ray:''));
       throw new Error('Binter ha bloqueado la consulta automatizada desde GitHub Actions (Cloudflare). No se ha podido acceder al buscador ni comprobar precios.');
     }
