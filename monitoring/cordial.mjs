@@ -515,6 +515,22 @@ async function setAdults(page,config){
     console.log(`[cordial] Ocupación aplicada y verificada en formulario: ${actual} adultos.`);
     return true;
   }
+  // Diagnóstico específico de la estructura real del selector de huéspedes en BeCordial.
+  const guestControls=await page.evaluate(()=>{
+    const form=document.querySelector('#booking_process_form');
+    const inputs=[...(form?.querySelectorAll('input,select')||[])].map(el=>({
+      tag:el.tagName,name:el.name,id:el.id,type:el.type,value:/adult|child|room|guest|pax|person|ocup/i.test((el.name||'')+' '+(el.id||''))?el.value:'[omitted]'
+    }));
+    const candidate=[...document.querySelectorAll('[id*="who"],[class*="who"],[id*="guest"],[class*="guest"],[id*="adult"],[class*="adult"],[id*="person"],[class*="person"],[id*="occup"],[class*="occup"],[id*="room"],[class*="room"],[id*="pax"],[class*="pax"]')];
+    const relevant=candidate.filter(el=>{
+      const a=((el.id||'')+' '+String(el.className||'')).toLowerCase();
+      return /(who|guest|adult|person|occup|pax)/.test(a);
+    }).slice(0,35);
+    const elements=relevant.map(el=>({tag:el.tagName,id:el.id,cls:String(el.className||'').slice(0,140),text:String(el.innerText||'').slice(0,190),html:el.outerHTML.slice(0,850)}));
+    const bookingText=String(form?.innerText||'').slice(0,1200);
+    return {inputs,elements,bookingText};
+  }).catch(e=>({error:String(e)}));
+  console.log('[cordial] DIAGNOSTICO_SELECTOR_HUESPEDES',JSON.stringify(guestControls).slice(0,19000));
   // El formulario público de Cordial parte normalmente de 2 adultos. Si ya lo muestra, no tocamos el contador.
   const text=await page.locator('body').innerText().catch(()=> '');if(new RegExp(`\\b${adults}\\s+adultos?\\b`,'i').test(text))return true;
   return false;
