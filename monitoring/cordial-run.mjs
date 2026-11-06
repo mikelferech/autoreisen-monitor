@@ -6,7 +6,8 @@ import {monitorCordial} from './cordial.mjs';
 const document=JSON.parse(await fs.readFile(new URL('./config.json',import.meta.url),'utf8'));
 const config={enabled:true,scheduleTime:'06:35',scheduleTimeZone:'Europe/Madrid',...(document.cordial||{})};
 const force=/^(1|true|yes)$/i.test(String(process.env.MFE_FORCE_RUN||''));
-if(config.enabled===false){console.log('Monitor Cordial desactivado desde MFE Viajes.');process.exit(0);}
+if(config.enabled===false&&!force){console.log('[cordial] Seguimiento diario desactivado; no se ejecuta el cron. Una comprobación manual forzada sí puede ejecutarse.');process.exit(0);}
+if(config.enabled===false&&force){console.log('[cordial] Comprobación manual forzada: se ejecuta aunque el seguimiento diario esté desactivado.');}
 if(!force){
   const previous=await readTrackerLatest('cordial');
   if(successfulResultToday(previous.result)&&Number(previous.result.targetPrice||previous.result.target?.price)>0){
