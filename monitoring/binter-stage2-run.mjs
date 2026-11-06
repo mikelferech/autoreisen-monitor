@@ -34,6 +34,13 @@ async function scan(browser){
     await page.goto('https://www.bintercanarias.com/es/buscar-vuelos',{waitUntil:'domcontentloaded',timeout:65000});
     await page.waitForTimeout(3500);diagnostics.url=page.url();
     await clickAny(page,[page.getByRole('button',{name:/aceptar todas|aceptar cookies|acepto/i})],'cookies',{required:false});
+    console.log('[binter] DIAGNOSTICO_INICIO',JSON.stringify(await page.evaluate(()=>({
+      url:location.href,
+      inputs:[...document.querySelectorAll('input')].slice(0,35).map(x=>({id:x.id,name:x.name,type:x.type,placeholder:x.placeholder,aria:x.getAttribute('aria-label'),outer:x.outerHTML.slice(0,350)})),
+      labels:[...document.querySelectorAll('label')].slice(0,22).map(x=>({text:x.textContent.trim().slice(0,100),html:x.outerHTML.slice(0,300)})),
+      originControls:[...document.querySelectorAll('[id*="origin" i],[class*="origin" i],[id*="origen" i],[class*="origen" i]')].slice(0,30).map(x=>({tag:x.tagName,id:x.id,class:String(x.className).slice(0,120),html:x.outerHTML.slice(0,400)})),
+      text:document.body.innerText.slice(0,1800)
+    })).catch(e=>({error:String(e)}))).slice(0,19000));
     await clickAny(page,[page.getByRole('button',{name:/origen/i}),page.getByText('Origen',{exact:true}),page.locator('input[placeholder*="Origen"]')],'origen');
     await chooseIsland(page,cfg.origin||'LPA','origen LPA');
     await clickAny(page,[page.getByRole('button',{name:/destino/i}),page.getByText('Destino',{exact:true}),page.locator('input[placeholder*="Destino"]')],'destino');
