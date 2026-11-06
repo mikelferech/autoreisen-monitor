@@ -511,8 +511,28 @@ async function setAdults(page,config){
   const summary=page.locator('#id_paxes').first();
   const popup=page.locator('#who_popup').first();
   if(await summary.count().catch(()=>0)&&await popup.count().catch(()=>0)){
-    await summary.click({force:true,timeout:4000}).catch(()=>{});
-    await popup.waitFor({state:'visible',timeout:4000}).catch(()=>{});
+    const openerHtml=await summary.evaluate(el=>el.parentElement?.outerHTML.slice(0,1600)||'').catch(()=>'');
+    console.log('[cordial] Contenedor huéspedes:',openerHtml.replace(/\\s+/g,' ').slice(0,1600));
+    // El input #id_paxes es readonly. En BeCordial el clic se atiende en su contenedor.
+    const openers=[
+      page.locator('.input-like.who,.input-like.paxes,.pick-pax-trigger,[data-target="#who_popup"]').first(),
+      summary.locator('xpath=..'),
+      summary
+    ];
+    for(const opener of openers){
+      if(await popup.isVisible().catch(()=>false))break;
+      if(!await opener.count().catch(()=>0))continue;
+      await opener.click({force:true,timeout:1800}).catch(()=>{});
+      await page.waitForTimeout(170);
+    }
+    let popupOpened=await popup.isVisible().catch(()=>false);
+    if(!popupOpened){
+      // El popup ya existe con contadores/listeners, pero el wrapper antiguo no lo
+      // activa en Chrome headless. Abrirlo solo visualmente permite pulsar su JS nativo.
+      await popup.evaluate(el=>{el.style.display='block';el.style.visibility='visible';}).catch(()=>{});
+      popupOpened=await popup.isVisible().catch(()=>false);
+    }
+    console.log(`[cordial] Panel de huéspedes abierto=${popupOpened?'sí':'no'}`);
     const counter=popup.locator('.room .adults').first();
     if(await counter.count().catch(()=>0)){
       const qty=counter.locator('.qty').first();
@@ -525,10 +545,15 @@ async function setAdults(page,config){
           const control=counter.locator(up?'.action-up':'.action-down').first();
           if(!await control.count().catch(()=>0))break;
           const before=await read();
-          const clicked=await control.click({force:true,timeout:3000}).then(()=>true).catch(()=>false);
-          if(!clicked)break;
-          await page.waitForTimeout(130);
+          let clickError='';
+          let clicked=await control.click({force:true,timeout:2000}).then(()=>true).catch(e=>{clickError=String(e?.message||e).slice(0,230);return false;});
+          if(!clicked){
+            clicked=await control.evaluate(el=>{el.click();return true;}).catch(()=>false);
+          }
+          await page.waitForTimeout(150);
           current=await read();
+          console.log(`[cordial] Contador adultos paso ${step+1}: ${before}→${current} · clic=${clicked?'sí':'no'}${clickError?` · detalle=${clickError}`:''}`);
+          if(!clicked)break;
           if(!Number.isFinite(current)||current===before)break;
           if(current===adults)break;
         }
