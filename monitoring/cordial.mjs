@@ -89,7 +89,7 @@ const eur=text=>{
   return rows;
 };
 function targetMatches(row,config){
-  const room=normalize(config.targetRoom||'Classic Duplex'),rate=normalize(config.targetRate||'Club Cordial - Reserva Online'),board=normalize(config.targetBoard||'SOLO ALOJAMIENTO');
+  const room=normalize(config.targetRoom||'Beach Club House'),rate=normalize(config.targetRate||'Club Cordial - Reserva Online'),board=normalize(config.targetBoard||'SOLO ALOJAMIENTO');
   return (!room||normalize(row.roomType).includes(room))&&(!rate||normalize(row.rateName).includes(rate))&&(!board||normalize(row.board).includes(board));
 }
 function reservationOnline(row){
@@ -728,7 +728,7 @@ async function visibleReserveCount(page){
   return visibleCount;
 }
 async function roomRatesReady(page,config={}){
-  const wantedRoom=String(config.targetRoom||'Classic Duplex').trim();
+  const wantedRoom=String(config.targetRoom||'Beach Club House').trim();
   const body=await page.locator('body').innerText().catch(()=> '');
   if(wantedRoom&&new RegExp(wantedRoom.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'i').test(body))return true;
   if(/Tarifa Club Cordial|Tarifa Est[aá]ndar|Club Cordial\s*-\s*(?:Oferta Prepago Online|Reserva Online)|SOLO ALOJAMIENTO/i.test(body))return true;
@@ -1057,7 +1057,7 @@ export async function monitorCordial(browser,config={}){
     const target=targetDisagreement?null:selectTargetOption(options,config);
     if(target)console.log(`[cordial] Objetivo ${target.targetMatch==='exact'?'exacto':'inferido'}: ${target.roomType} · ${target.rateName} · ${target.board} · ${Number(target.price).toFixed(2)} €`);
     await snapshot(page,'cordial-resultados');
-    return {ok:true,status:'ok',source:'BeCordial · navegador real · GitHub Actions + Playwright',checkedAt:isoNow(),hotel:config.hotel||'Cordial Santa Águeda & Perchel Beach Club',checkIn:config.checkIn,checkOut:config.checkOut,adults:Number(config.adults)||2,options,roomMeta,target,targetPrice:Number(target?.price)||0,availability:target?'Disponible':'Sin tarifa exacta confirmada',resultUrl:page.url()};
+    return {ok:true,status:target?'ok':'partial',error:target?'':'No se encontró la tarifa exacta Beach Club House · Reserva Online · Solo alojamiento para las fechas y adultos consultados.',source:'BeCordial · navegador real · GitHub Actions + Playwright',checkedAt:isoNow(),hotel:config.hotel||'Cordial Santa Águeda & Perchel Beach Club',checkIn:config.checkIn,checkOut:config.checkOut,adults:Number(config.adults)||2,options,roomMeta,target,targetPrice:Number(target?.price)||0,availability:target?'Disponible':'Sin tarifa exacta confirmada',resultUrl:page.url()};
   }finally{await context.close();}
 }
 
