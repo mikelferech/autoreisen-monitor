@@ -16,14 +16,14 @@
     "preferredReturnFlight": "VY3271"
   },
   "autoreisen": {
-    "enabled": false,
+    "enabled": true,
     "searchUrl": "https://www.autoreisen.com/alquiler-coches/alquiler-de-coches.php",
     "pickup": "Gran Canaria - Aeropuerto",
     "dropoff": "Gran Canaria - Aeropuerto",
     "pickupAt": "2027-09-06T09:30",
     "dropoffAt": "2027-09-13T15:30",
-    "group": "D",
-    "model": "Dacia Sandero Stepway Autom.",
+    "group": "G",
+    "model": "D.Jogger 5 Pax Family",
     "reservedPrice": 0,
     "intervalHours": 24,
     "telegramEnabled": false,
