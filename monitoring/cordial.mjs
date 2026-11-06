@@ -505,34 +505,62 @@ async function fillDateInputs(page,config){
 }
 async function setAdults(page,config){
   const adults=Math.max(1,Number(config.adults)||2);
+  // BeCordial emplea actualmente un selector de huéspedes personalizado:
+  // #id_paxes (resumen de solo lectura), #who_popup y div.adults .action-up/down.
+  // No hay un input[name=adults] en el formulario de reservas.
+  const summary=page.locator('#id_paxes').first();
+  const popup=page.locator('#who_popup').first();
+  if(await summary.count().catch(()=>0)&&await popup.count().catch(()=>0)){
+    await summary.click({force:true,timeout:4000}).catch(()=>{});
+    await popup.waitFor({state:'visible',timeout:4000}).catch(()=>{});
+    const counter=popup.locator('.room .adults').first();
+    if(await counter.count().catch(()=>0)){
+      const qty=counter.locator('.qty').first();
+      const read=async()=>Number.parseInt(String(await qty.textContent().catch(()=>'' )).trim(),10);
+      let current=await read();
+      console.log(`[cordial] Selector de huéspedes: adultos iniciales=${Number.isFinite(current)?current:'—'} · solicitados=${adults}`);
+      if(Number.isFinite(current)){
+        for(let step=0;step<Math.min(Math.abs(adults-current),15);step++){
+          const up=adults>current;
+          const control=counter.locator(up?'.action-up':'.action-down').first();
+          if(!await control.count().catch(()=>0))break;
+          const before=await read();
+          const clicked=await control.click({force:true,timeout:3000}).then(()=>true).catch(()=>false);
+          if(!clicked)break;
+          await page.waitForTimeout(130);
+          current=await read();
+          if(!Number.isFinite(current)||current===before)break;
+          if(current===adults)break;
+        }
+        // El resumen visual lo actualiza el JS original, junto a allocations.
+        await page.locator('label').filter({hasText:/hu[eé]spedes/i}).first().click({force:true,timeout:1200}).catch(()=>{});
+        await page.waitForTimeout(200);
+        const finalQty=await read();
+        const display=String(await summary.inputValue().catch(()=>'' )).trim();
+        const allocations=String(await page.locator('input[name="allocations"]').first().inputValue().catch(()=>'' )).trim();
+        console.log(`[cordial] Huéspedes tras ajuste: contador=${finalQty} · resumen=${display||'—'} · allocations=${allocations.slice(0,350)||'—'}`);
+        if(finalQty===adults&&new RegExp(`\\b${adults}\\s+adultos?\\b`,'i').test(display)){
+          console.log(`[cordial] Ocupación confirmada con el selector nativo: ${adults} adultos.`);
+          return true;
+        }
+      }
+    }
+  }
+  // Compatibilidad con otras versiones del formulario de BeCordial.
   const inputs=page.locator('input[name*="adult" i],select[name*="adult" i]');
   if(await inputs.count()){
     const el=inputs.first();
     if((await el.evaluate(e=>e.tagName)).toLowerCase()==='select')await el.selectOption(String(adults)).catch(()=>{});
     else await forceControlValue(el,String(adults));
     const actual=String(await el.inputValue().catch(()=>''));
-    if(actual!==String(adults))throw new Error(`Cordial: la web no aceptó ${adults} adultos (valor real ${actual||'vacío'}).`);
-    console.log(`[cordial] Ocupación aplicada y verificada en formulario: ${actual} adultos.`);
-    return true;
+    if(actual===String(adults)){
+      console.log(`[cordial] Ocupación aplicada al campo: ${actual} adultos.`);
+      return true;
+    }
   }
-  // Diagnóstico específico de la estructura real del selector de huéspedes en BeCordial.
-  const guestControls=await page.evaluate(()=>{
-    const form=document.querySelector('#booking_process_form');
-    const inputs=[...(form?.querySelectorAll('input,select')||[])].map(el=>({
-      tag:el.tagName,name:el.name,id:el.id,type:el.type,value:/adult|child|room|guest|pax|person|ocup/i.test((el.name||'')+' '+(el.id||''))?el.value:'[omitted]'
-    }));
-    const candidate=[...document.querySelectorAll('[id*="who"],[class*="who"],[id*="guest"],[class*="guest"],[id*="adult"],[class*="adult"],[id*="person"],[class*="person"],[id*="occup"],[class*="occup"],[id*="room"],[class*="room"],[id*="pax"],[class*="pax"]')];
-    const relevant=candidate.filter(el=>{
-      const a=((el.id||'')+' '+String(el.className||'')).toLowerCase();
-      return /(who|guest|adult|person|occup|pax)/.test(a);
-    }).slice(0,35);
-    const elements=relevant.map(el=>({tag:el.tagName,id:el.id,cls:String(el.className||'').slice(0,140),text:String(el.innerText||'').slice(0,190),html:el.outerHTML.slice(0,850)}));
-    const bookingText=String(form?.innerText||'').slice(0,1200);
-    return {inputs,elements,bookingText};
-  }).catch(e=>({error:String(e)}));
-  console.log('[cordial] DIAGNOSTICO_SELECTOR_HUESPEDES',JSON.stringify(guestControls).slice(0,19000));
-  // El formulario público de Cordial parte normalmente de 2 adultos. Si ya lo muestra, no tocamos el contador.
-  const text=await page.locator('body').innerText().catch(()=> '');if(new RegExp(`\\b${adults}\\s+adultos?\\b`,'i').test(text))return true;
+  const summaryText=String(await summary.inputValue().catch(()=>'' ));
+  if(new RegExp(`\\b${adults}\\s+adultos?\\b`,'i').test(summaryText))return true;
+  console.log(`[cordial] Ocupación sin confirmar; resumen actual=${summaryText||'—'}`);
   return false;
 }
 async function bookingResultReady(page){
