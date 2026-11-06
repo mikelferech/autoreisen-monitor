@@ -568,6 +568,29 @@ async function setAdults(page,config){
           console.log(`[cordial] Ocupación confirmada con el selector nativo: ${adults} adultos.`);
           return true;
         }
+        // El widget general limita sus botones a cuatro adultos, pero Beach Club House
+        // admite seis. Para esta habitación y ocupación, conservar la selección de
+        // UNA habitación y preparar allocations con los cinco adultos reales.
+        if(finalQty<adults&&adults===5&&normalize(config.targetRoom||'')==='beach club house'){
+          const allocationField=page.locator('input[name="allocations"]').first();
+          try{
+            const previous=JSON.parse(allocations||'[]');
+            if(Array.isArray(previous)&&previous.length===1&&Number(previous[0]?.ch||0)===0){
+              previous[0].ad=adults;
+              previous[0].ages=Array.from({length:adults},()=>30);
+              const encoded=JSON.stringify(previous);
+              await qty.evaluate((el,v)=>{el.textContent=v;},String(adults));
+              const setA=await setControlValueRaw(allocationField,encoded);
+              const setS=await setControlValueRaw(summary,`${adults} adultos - 0 niños - 0 bebés`);
+              const actualAlloc=String(await allocationField.inputValue().catch(()=>''));
+              const actualDisplay=String(await summary.inputValue().catch(()=>''));
+              if(setA&&setS&&actualAlloc===encoded&&new RegExp(`\\b${adults}\\s+adultos?\\b`,'i').test(actualDisplay)){
+                console.log(`[cordial] Ocupación cinco adultos/una habitación preparada en allocations=${encoded}. Se verificará en los resultados del servidor.`);
+                return true;
+              }
+            }
+          }catch(error){console.log(`[cordial] No se pudo preparar la ocupación 5/1: ${error?.message||String(error)}`);}
+        }
       }
     }
   }
@@ -682,6 +705,7 @@ async function postFormDirect(page,form,fallback={}){
   if(!stable.ok){console.log(`[cordial] POST directo cancelado: faltan controles críticos · destination_id=${stable.destinationId||'—'} · hotel_codes=${stable.hotelCode||'—'}`);return false;}
   const state=await formState(page,form);if(!state?.action)return false;
   const params=new URLSearchParams();for(const [key,value] of state.data||[])params.append(key,value);
+  if(fallback.allocations)params.set('allocations',fallback.allocations);
   // Defensa adicional: forzamos los valores críticos también en el payload.
   params.set('destination_id',stable.destinationId);
   params.set('hotel_codes',stable.hotelCode);
@@ -718,6 +742,7 @@ async function installCriticalPostGuard(page,critical){
       const beforeHotel=params.get('hotel_codes')||'';
       if(critical.destinationId)params.set('destination_id',critical.destinationId);
       if(critical.hotelCode)params.set('hotel_codes',critical.hotelCode);
+      if(critical.allocations)params.set('allocations',critical.allocations);
       const headers={...request.headers()};delete headers['content-length'];
       if(!logged&&(beforeDestination!==critical.destinationId||beforeHotel!==critical.hotelCode)){
         console.log(`[cordial] POST interceptado y corregido antes de salir: destination_id=${beforeDestination||'—'}→${critical.destinationId||'—'} · hotel_codes=${beforeHotel||'—'}→${critical.hotelCode||'—'}`);
@@ -734,7 +759,9 @@ async function submitSearch(page){
   const bookingInput=page.locator('input[name="hotel_codes"]').first();
   const form=bookingInput.locator('xpath=ancestor::form[1]');
   const initialCritical=await stabilizeBookingControls(page,form);
-  const critical={destinationId:initialCritical.destinationId,hotelCode:initialCritical.hotelCode};
+  const allocations=String(await form.locator('input[name="allocations"]').first().inputValue().catch(()=>'')).trim();
+  const critical={destinationId:initialCritical.destinationId,hotelCode:initialCritical.hotelCode,allocations};
+  console.log(`[cordial] Ocupación que se enviará: ${allocations.slice(0,300)||'—'}`);
   console.log(`[cordial] Controles críticos antes de enviar: destination_id=${critical.destinationId||'—'} · hotel_codes=${critical.hotelCode||'—'}`);
   if(!initialCritical.ok)return false;
   const initialState=await formState(page,form);
