@@ -41,6 +41,17 @@ async function scan(browser){
       throw new Error('Binter ha bloqueado la consulta automatizada desde GitHub Actions (Cloudflare). No se ha podido acceder al buscador ni comprobar precios.');
     }
     await clickAny(page,[page.getByRole('button',{name:/aceptar todas|aceptar cookies|acepto/i})],'cookies',{required:false});
+    // Diagnóstico HTML del buscador real, sin datos personales ni credenciales.
+    const structure=await page.evaluate(()=>({
+      title:document.title,
+      originElements:[...document.querySelectorAll('input,button,[role="combobox"],[role="button"],label,[class*="origin"],[id*="origin"],[class*="departure"],[id*="departure"]')].slice(0,80).map(el=>({tag:el.tagName,id:el.id,cls:String(el.className||'').slice(0,100),role:el.getAttribute('role'),label:el.getAttribute('aria-label'),placeholder:el.getAttribute('placeholder'),text:String(el.innerText||'').slice(0,110),outer:el.outerHTML.slice(0,500)})),
+      frames:[...document.querySelectorAll('iframe')].map(el=>({title:el.title,src:el.src})),
+      excerpt:String(document.body?.innerText||'').slice(0,1400)
+    })).catch(e=>({error:String(e)}));
+    console.log('[binter] DIAGNOSTICO_FORM',JSON.stringify(structure).slice(0,23000));
+    await fs.mkdir(path.resolve('artifacts/binter'),{recursive:true}).catch(()=>{});
+    await page.screenshot({path:path.resolve('artifacts/binter/formulario.png'),fullPage:true}).catch(()=>{});
+    await fs.writeFile(path.resolve('artifacts/binter/formulario.html'),await page.content().catch(()=>''),'utf8').catch(()=>{});
     await clickAny(page,[page.getByRole('button',{name:/origen/i}),page.getByText('Origen',{exact:true}),page.locator('input[placeholder*="Origen"]')],'origen');
     await chooseIsland(page,cfg.origin||'LPA','origen LPA');
     await clickAny(page,[page.getByRole('button',{name:/destino/i}),page.getByText('Destino',{exact:true}),page.locator('input[placeholder*="Destino"]')],'destino');
