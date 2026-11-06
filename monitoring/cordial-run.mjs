@@ -9,7 +9,7 @@ const force=/^(1|true|yes)$/i.test(String(process.env.MFE_FORCE_RUN||''));
 if(config.enabled===false){console.log('Monitor Cordial desactivado desde MFE Viajes.');process.exit(0);}
 if(!force){
   const previous=await readTrackerLatest('cordial');
-  if(successfulResultToday(previous.result)){
+  if(successfulResultToday(previous.result)&&Number(previous.result.targetPrice||previous.result.target?.price)>0){
     console.log(`[cordial] OMITIDO: ya existe una comprobación correcta de hoy (${previous.result.checkedAt||previous.result.receivedAt||'sin hora'}). El cron tardío no repetirá la consulta.`);
     process.exit(0);
   }
@@ -47,7 +47,8 @@ try{
   let guard;
   const result=await Promise.race([monitorCordial(browser,config),new Promise((_,reject)=>{guard=setTimeout(()=>reject(new Error('Cordial: consulta agotada tras 120 segundos. Revisa el diagnóstico de la página y vuelve a comprobar.')),120000);})]).finally(()=>clearTimeout(guard));
   await postResult('cordial',{...result,checkedAt:result.checkedAt||isoNow()});
-  console.log('[cordial] OK',JSON.stringify(result,null,2));
+  console.log(result.status==='partial'?'[cordial] SIN TARIFA CONFIRMADA':'[cordial] OK',JSON.stringify(result,null,2));
+  if(result.status==='partial')process.exitCode=1; // Publicar diagnóstico de GitHub; el resultado parcial ya se guardó.
 }catch(error){
   const result={ok:false,status:'error',error:error?.message||String(error),checkedAt:isoNow(),source:'BeCordial · GitHub Actions + Playwright'};
   console.error('[cordial] ERROR',error);
